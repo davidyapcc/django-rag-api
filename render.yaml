@@ -1,0 +1,25 @@
+# Render Blueprint: New > Blueprint, point it at this repo.
+# The database is Neon (free tier, pgvector included); paste its URL as DATABASE_URL.
+services:
+  - type: web
+    name: django-rag-api
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /api/v1/health/
+    autoDeploy: true
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false # Neon connection string, with ?sslmode=require
+      - key: LLM_PROVIDER
+        value: openai
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: WEB_CONCURRENCY
+        value: "2"
+      - key: THROTTLE_ASK
+        value: 20/hour
+      - key: THROTTLE_UPLOAD
+        value: 10/day

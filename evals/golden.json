@@ -1,0 +1,15 @@
+[
+  {"question": "What water temperature should I use for brewing coffee?", "document": "coffee-brewing.md", "expect": ["90", "96"]},
+  {"question": "What grind size does a French press need?", "document": "coffee-brewing.md", "expect": ["coarse"]},
+  {"question": "How long should an espresso shot run?", "document": "coffee-brewing.md", "expect": ["25", "30"]},
+  {"question": "Should I keep coffee beans in the fridge?", "document": "coffee-brewing.md", "expect": ["fridge"]},
+  {"question": "Which should I restart first, the modem or the router?", "document": "home-network.md", "expect": ["modem"]},
+  {"question": "Which Wi-Fi band reaches further through walls?", "document": "home-network.md", "expect": ["2.4"]},
+  {"question": "Websites fail to load but ping to an IP works. What is wrong?", "document": "home-network.md", "expect": ["DNS"]},
+  {"question": "Why should I turn off WPS on my router?", "document": "home-network.md", "expect": ["brute"]},
+  {"question": "How often should I feed a sourdough starter?", "document": "sourdough.md", "expect": ["once a day"]},
+  {"question": "What does dough hydration mean?", "document": "sourdough.md", "expect": ["water divided"]},
+  {"question": "How long does bulk fermentation take?", "document": "sourdough.md", "expect": ["four to six hours"]},
+  {"question": "Why let the sourdough loaf cool before slicing?", "document": "sourdough.md", "expect": ["gummy"]},
+  {"question": "What is the capital city of Australia?", "document": null, "expect": []}
+]
