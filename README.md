@@ -71,11 +71,11 @@ curl -s -X POST localhost:8000/api/v1/ask/ \
   "answer": "Bulk fermentation usually takes four to six hours at 24 degrees Celsius.",
   "citations": [{"chunk_id": 10, "document_id": 7, "document_title": "sourdough.md", "index": 0, "text": "..."}],
   "provider": "openai",
-  "model": "gpt-4o-mini",
+  "model": "gpt-6-luna",
   "input_tokens": 412,
   "output_tokens": 31,
   "embedding_tokens": 9,
-  "cost_usd": "0.00008058",
+  "cost_usd": "0.00005688",
   "latency_ms": 1180
 }
 ```
