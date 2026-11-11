@@ -18,7 +18,7 @@ A change is done when every gate in `.github/workflows/ci.yml` passes locally: r
 ## Layout conventions
 
 - Views stay thin (validate, call a service, map errors to status codes). The API (`apps/*/views.py`) and the web UI (`apps/web/`) are two front doors onto the same services; put rules in the service so both get them. Logic lives in `apps/*/services.py`; provider-agnostic RAG pieces live in `rag/`.
-- Domain terms (Owner, Document, Chunk, Query, Citation, Guest, Demo budget) are defined in `CONTEXT.md`; use them in code and copy.
+- Domain terms (Owner, Document, Chunk, Query, Follow-up, Citation, Guest, Demo budget, Allowance) are defined in `CONTEXT.md`; use them in code and copy.
 - A new LLM vendor is one class implementing the `LLMProvider` protocol in `rag/providers.py`, plus a branch in `_build`. Each provider owns its `max_distance`, because embedding models differ in scale.
 - Model names and token prices are settings fed by env vars, so a price change is a config change.
 
