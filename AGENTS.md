@@ -27,3 +27,17 @@ A change is done when every gate in `.github/workflows/ci.yml` passes locally: r
 - Chunk size, `max_distance` and the eval thresholds in `apps/qa/management/commands/run_eval.py` move together: tune retrieval against the eval, and raise a threshold only when the eval clears it with margin.
 - Ingestion is synchronous with a size cap on purpose (Render/Cloud Run throttle CPU after the response). Moving it to a queue is a design change: update the README trade-offs too.
 - Production settings force HTTPS redirects. The autouse fixture in `tests/conftest.py` disables that and pins the fake provider for every test; keep new test-wide setup there.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for `davidyapcc/django-rag-api` (`gh` locally, GitHub MCP tools in cloud sessions). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` plus `docs/adr/` (created lazily). See `docs/agents/domain.md`.
