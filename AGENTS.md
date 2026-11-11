@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Django + DRF document Q&A API: uploads are chunked, embedded into Postgres/pgvector, and `/ask` answers from them with citations. The README holds the architecture and the design trade-offs; when you change one of those decisions, update its README section in the same change.
+Django + DRF document Q&A API: uploads are chunked, embedded into Postgres/pgvector, and `/ask` answers from them with citations. The README holds the architecture and the design trade-offs, and `docs/adr/` records why the less obvious ones were made. When you change one of those decisions, update its README section in the same change, and supersede its ADR rather than editing it.
 
 ## Done means green
 
