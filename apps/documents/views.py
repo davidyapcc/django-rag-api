@@ -7,6 +7,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from apps.core.budget import BudgetExceededError
 from rag.extraction import SUPPORTED_EXTENSIONS
 from rag.providers import ProviderError
 
@@ -50,6 +51,8 @@ class DocumentViewSet(
                 {"detail": str(exc), "document": DocumentSerializer(exc.existing).data},
                 status=status.HTTP_409_CONFLICT,
             )
+        except BudgetExceededError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
         except IngestionError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
         except ProviderError:

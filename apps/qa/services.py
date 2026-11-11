@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from django.conf import settings
 from pgvector.django import CosineDistance
 
+from apps.core import budget
 from apps.documents.models import Chunk
 from rag.pricing import chat_cost, embedding_cost
 from rag.providers import get_provider
@@ -40,6 +41,7 @@ def retrieve(
 
 
 def ask(owner, question: str, document_ids: list[int] | None = None, top_k: int | None = None) -> Query:
+    budget.ensure_available()
     started = time.monotonic()
     provider = get_provider()
     top_k = top_k or settings.RAG_TOP_K
@@ -72,6 +74,7 @@ def ask(owner, question: str, document_ids: list[int] | None = None, top_k: int 
         latency_ms=int((time.monotonic() - started) * 1000),
     )
     query.cited_chunks.set(cited)
+    budget.record(query.cost_usd)
     logger.info(
         "ask query=%s retrieved=%d cited=%d cost_usd=%s latency_ms=%d",
         query.pk,

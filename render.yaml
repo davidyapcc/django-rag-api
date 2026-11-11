@@ -23,3 +23,5 @@ services:
         value: 20/hour
       - key: THROTTLE_UPLOAD
         value: 10/day
+      - key: DEMO_DAILY_BUDGET_USD
+        value: "0.50"

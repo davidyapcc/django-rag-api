@@ -1,0 +1,25 @@
+<article>
+  <header><strong>Documents</strong>{% if guest %} <small class="muted">({{ documents|length }} of {{ guest_max_documents }})</small>{% endif %}</header>
+  {% if error %}<p class="flash flash-error" role="alert">{{ error }}</p>{% endif %}
+  {% if notice %}<p class="flash flash-success" role="status">{{ notice }}</p>{% endif %}
+  {% if documents %}
+    <ul class="doc-list">
+      {% for d in documents %}
+        <li>
+          <span><strong>{{ d.title }}</strong> <small class="muted">{{ d.chunk_count }} chunk{{ d.chunk_count|pluralize }}</small></span>
+          <button class="secondary outline small" hx-post="{% url 'web:delete-document' d.pk %}" hx-target="#documents-panel" hx-confirm="Delete {{ d.title }}?">Delete</button>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No documents yet. Load the samples to try it straight away.</p>
+  {% endif %}
+  <button class="secondary" hx-post="{% url 'web:samples' %}" hx-target="#documents-panel" hx-indicator="#uploading" hx-disabled-elt="this">Load sample documents</button>
+  <form hx-post="{% url 'web:upload' %}" hx-encoding="multipart/form-data" hx-target="#documents-panel" hx-indicator="#uploading" hx-disabled-elt="find button">
+    <label>Or upload your own (.txt, .md, .pdf)
+      <input type="file" name="file" accept="{{ accept }}" required>
+    </label>
+    <button type="submit">Upload</button>
+  </form>
+  <p id="uploading" class="htmx-indicator" aria-busy="true">Processing…</p>
+</article>

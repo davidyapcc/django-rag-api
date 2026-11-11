@@ -1,0 +1,11 @@
+{% extends "web/base.html" %}
+{% block content %}
+<article class="narrow">
+  <h2>Log in</h2>
+  <form method="post">{% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Log in</button>
+  </form>
+  <small>No account? <a href="{% url 'web:signup' %}">Sign up</a>, or go back and try it as a guest.</small>
+</article>
+{% endblock %}

@@ -7,6 +7,7 @@ from rest_framework.decorators import action
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from apps.core.budget import BudgetExceededError
 from rag.providers import ProviderError
 
 from .models import Query
@@ -24,6 +25,8 @@ class AskView(generics.GenericAPIView):
         ser.is_valid(raise_exception=True)
         try:
             query = ask(request.user, **ser.validated_data)
+        except BudgetExceededError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
         except ProviderError:
             return Response({"detail": "LLM provider unavailable"}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(QuerySerializer(query).data, status=status.HTTP_201_CREATED)

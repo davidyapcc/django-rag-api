@@ -11,11 +11,13 @@ A change is done when every gate in `.github/workflows/ci.yml` passes locally: r
 - **Tenant isolation.** Every query over `Document`, `Chunk` or `Query` filters by owner. `Chunk.owner` is denormalised so retrieval scopes by owner in the same SQL as the similarity search; set it on every chunk you create. Add a cross-user test for any new endpoint.
 - **Citations are verified.** `apps/qa/services.ask` keeps only cited ids that were actually retrieved. Model output never reaches the client unfiltered.
 - **Document text is data.** Retrieved chunks go to the model fenced as `<chunk>` and the system prompt says to ignore instructions inside them. Keep both when editing prompts.
+- **Spend goes through the Demo budget.** Any new code path that calls the provider calls `budget.ensure_available()` before and `budget.record()` after (see `apps/core/budget.py`).
 - **Offline by default.** Tests, CI and the eval run on `FakeProvider`; stub the OpenAI client (see `tests/test_providers.py`) to test provider code. A live API call belongs only in a manual `run_eval` with `LLM_PROVIDER=openai`.
 
 ## Layout conventions
 
-- Views stay thin (validate, call a service, map errors to status codes). Logic lives in `apps/*/services.py`; provider-agnostic RAG pieces live in `rag/`.
+- Views stay thin (validate, call a service, map errors to status codes). The API (`apps/*/views.py`) and the web UI (`apps/web/`) are two front doors onto the same services; put rules in the service so both get them. Logic lives in `apps/*/services.py`; provider-agnostic RAG pieces live in `rag/`.
+- Domain terms (Owner, Document, Chunk, Query, Citation, Guest, Demo budget) are defined in `CONTEXT.md`; use them in code and copy.
 - A new LLM vendor is one class implementing the `LLMProvider` protocol in `rag/providers.py`, plus a branch in `_build`. Each provider owns its `max_distance`, because embedding models differ in scale.
 - Model names and token prices are settings fed by env vars, so a price change is a config change.
 
