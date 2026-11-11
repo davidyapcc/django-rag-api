@@ -25,8 +25,12 @@ _Avoid_: Fixtures, seed data
 ### Asking
 
 **Query**:
-One question, its answer, the Citations, and what it cost. Single-shot: a Query knows nothing about earlier Queries.
+One question, its answer, the Citations, and what it cost. Single-shot unless it is a Follow-up: a Query knows nothing about other Queries.
 _Avoid_: Conversation, chat, message, turn
+
+**Follow-up**:
+A Query that names one earlier Query of the same Owner as its predecessor; a chain of Follow-ups is what a person would call a conversation. Its answer still rests only on Chunks retrieved for it, never on earlier answers.
+_Avoid_: Conversation, thread, turn
 
 **Citation**:
 A Chunk the answer relied on. Only Chunks that were actually retrieved for that Query can be Citations.
@@ -45,3 +49,7 @@ _Avoid_: Anonymous user, demo account, trial user
 **Demo budget**:
 The global cap on LLM spend per UTC day across all Owners. Once it is reached, new Queries are declined until the next day.
 _Avoid_: Quota, rate limit (a rate limit is per Owner)
+
+**Allowance**:
+The share of one UTC day's Demo budget a single Owner may spend. Once an Owner's Allowance is used up, their new Queries are declined even if the Demo budget has room.
+_Avoid_: Quota, per-user budget, credit
