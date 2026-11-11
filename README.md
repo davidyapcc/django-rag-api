@@ -146,7 +146,7 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 ## Design decisions and trade-offs
 
 - **pgvector instead of a separate vector database.** One datastore, transactional ingestion (a document and all of its chunks commit together or not at all), and owner filtering in the same SQL query as the similarity search. For this scale an HNSW index on Postgres is plenty.
-- **`owner` denormalised onto `Chunk`.** Retrieval filters by owner without a join, and tenant isolation is enforced in the one query that matters.
+- **`owner` denormalised onto `Chunk`.** Retrieval filters by owner without a join, and tenant isolation is enforced in the one query that matters. A composite foreign key to `Document(id, owner)` stops the copy from drifting from its document's owner.
 - **Synchronous ingestion with a size cap (2 MB).** It keeps the system simple and is correct on platforms that throttle CPU after a response is sent. The next step at scale would be a queue (Celery, or Cloud Tasks) with a `processing` status.
 - **Provider interface.** OpenAI and the fake provider implement the same two methods (`embed`, `answer`). Swapping to another vendor is one class plus one setting. Each provider owns its relevance cut-off because embedding models differ in scale.
 - **Structured output plus server-side citation validation.** JSON-schema output removes brittle parsing, and filtering cited ids against what was actually retrieved means the API never returns a citation it can't back up.
