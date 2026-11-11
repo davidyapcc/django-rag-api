@@ -1,0 +1,25 @@
+{% extends "web/base.html" %}
+{% block content %}
+<section class="hero">
+  <h1>Ask your documents. Get cited answers.</h1>
+  <p>Upload a document, ask a question, and get an answer drawn only from what you uploaded, with the exact passages it relied on. If the answer isn't there, it says so.</p>
+  <form method="post" action="{% url 'web:guest' %}">{% csrf_token %}
+    <button type="submit">Try it as a guest</button>
+  </form>
+  <small>No sign-up. Guest data is deleted after 24 hours. Or <a href="{% url 'web:signup' %}">create an account</a>.</small>
+</section>
+<section class="grid">
+  <article>
+    <h3>Grounded</h3>
+    <p>Retrieval over PostgreSQL + pgvector, scoped to your documents only. Citations are checked server-side against what was actually retrieved.</p>
+  </article>
+  <article>
+    <h3>Measured</h3>
+    <p>Every question logs tokens, cost and latency. A golden-question eval gates CI, so retrieval quality can't silently regress.</p>
+  </article>
+  <article>
+    <h3>Built with</h3>
+    <p>Django, Django REST Framework, PostgreSQL + pgvector, OpenAI, HTMX. A JSON API with JWT sits behind the same services as this page.</p>
+  </article>
+</section>
+{% endblock %}

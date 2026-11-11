@@ -1,0 +1,33 @@
+{% extends "web/base.html" %}
+{% block title %}Workspace · Django RAG API{% endblock %}
+{% block content %}
+{% if guest %}
+  <p class="banner">You're a guest. Your workspace is deleted at {{ guest.expires_at|date:"H:i" }} UTC on {{ guest.expires_at|date:"j M" }}. <a href="{% url 'web:signup' %}">Create an account</a> to keep it.</p>
+{% endif %}
+<div class="workspace">
+  <section id="documents-panel">{% include "web/partials/documents.html" %}</section>
+
+  <section>
+    <article>
+      <header><strong>Ask</strong></header>
+      <form hx-post="{% url 'web:ask' %}" hx-target="#answer" hx-indicator="#asking" hx-disabled-elt="find button">
+        <fieldset role="group">
+          {{ ask_form.question }}
+          <button type="submit">Ask</button>
+        </fieldset>
+      </form>
+      <p class="suggested">Try:
+        {% for q in suggested %}
+          <button type="button" class="chip secondary outline" hx-post="{% url 'web:ask' %}" hx-vals='{"question": "{{ q|escapejs }}"}' hx-target="#answer" hx-indicator="#asking">{{ q }}</button>
+        {% endfor %}
+      </p>
+      <p id="asking" class="htmx-indicator" aria-busy="true">Thinking…</p>
+      <div id="answer"></div>
+    </article>
+    <section id="history-panel" hx-get="{% url 'web:history' %}" hx-trigger="query-created from:body">
+      {% include "web/partials/history.html" %}
+    </section>
+    {% if budget_limit %}<small class="muted">Demo budget today: ${{ budget_spent|floatformat:4 }} of ${{ budget_limit|floatformat:2 }} used.</small>{% endif %}
+  </section>
+</div>
+{% endblock %}

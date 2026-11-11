@@ -1,0 +1,19 @@
+{% if error %}
+  <p class="flash flash-error" role="alert">{{ error }}</p>
+{% elif query %}
+  <blockquote>{{ query.answer }}</blockquote>
+  {% with citations=query.cited_chunks.all %}
+    {% if citations %}
+      <p><strong>Sources</strong></p>
+      {% for c in citations %}
+        <details>
+          <summary>{{ c.document.title }} · chunk {{ c.index }}</summary>
+          <pre class="chunk">{{ c.text }}</pre>
+        </details>
+      {% endfor %}
+    {% else %}
+      <p class="muted">No sources: nothing in your documents was relevant, so it didn't guess.</p>
+    {% endif %}
+  {% endwith %}
+  <small class="muted meta">{{ query.model }} · {{ query.input_tokens }} in / {{ query.output_tokens }} out tokens · ${{ query.cost_usd|floatformat:6 }} · {{ query.latency_ms }} ms</small>
+{% endif %}

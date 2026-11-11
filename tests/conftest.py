@@ -11,6 +11,11 @@ from rag import providers
 def _fake_provider(settings):
     settings.LLM_PROVIDER = "fake"
     settings.SECURE_SSL_REDIRECT = False
+    # The manifest storage needs collectstatic; tests render templates without it.
+    settings.STORAGES = {
+        **settings.STORAGES,
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    }
     providers._build.cache_clear()
     cache.clear()  # throttling state
     yield

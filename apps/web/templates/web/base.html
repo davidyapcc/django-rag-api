@@ -1,0 +1,36 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Django RAG API{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'web/vendor/pico.min.css' %}">
+  <link rel="stylesheet" href="{% static 'web/app.css' %}">
+  <script src="{% static 'web/vendor/htmx.min.js' %}" defer></script>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+  <header class="container">
+    <nav>
+      <ul><li><a href="{% url 'web:landing' %}"><strong>Django RAG API</strong></a></li></ul>
+      <ul>
+        <li><a href="https://github.com/davidyapcc/django-rag-api">GitHub</a></li>
+        <li><a href="{% url 'docs' %}">API docs</a></li>
+        {% if user.is_authenticated %}
+          <li><a href="{% url 'web:app' %}">App</a></li>
+          <li>
+            <form method="post" action="{% url 'web:logout' %}" class="inline">{% csrf_token %}
+              <button type="submit" class="secondary outline small">Log out</button>
+            </form>
+          </li>
+        {% else %}
+          <li><a href="{% url 'web:login' %}">Log in</a></li>
+        {% endif %}
+      </ul>
+    </nav>
+  </header>
+  <main class="container">
+    {% for message in messages %}<p class="flash flash-{{ message.tags }}" role="alert">{{ message }}</p>{% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

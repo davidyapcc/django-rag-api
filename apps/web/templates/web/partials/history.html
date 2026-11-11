@@ -1,0 +1,12 @@
+<article>
+  <header><strong>History</strong> <small class="muted">{{ totals.n }} question{{ totals.n|pluralize }} · ${{ totals.cost|default:0|floatformat:6 }} total</small></header>
+  {% if queries %}
+    <ul class="history">
+      {% for q in queries %}
+        <li><strong>{{ q.question }}</strong><br><span class="muted">{{ q.answer|truncatechars:140 }}</span></li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">Your questions will show up here.</p>
+  {% endif %}
+</article>

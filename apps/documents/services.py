@@ -7,9 +7,13 @@ from dataclasses import dataclass
 from django.conf import settings
 from django.db import transaction
 
+from apps.accounts.services import is_guest
+from apps.core import budget
 from rag.chunking import chunk_text
 from rag.extraction import ExtractionError, extract_text
+from rag.pricing import embedding_cost
 from rag.providers import ProviderError, get_provider
+from rag.types import Usage
 
 from .models import Chunk, Document
 
@@ -28,6 +32,10 @@ class DuplicateDocumentError(IngestionError):
         self.existing = existing
 
 
+class UploadLimitError(IngestionError):
+    pass
+
+
 @dataclass(frozen=True)
 class Upload:
     title: str
@@ -35,7 +43,19 @@ class Upload:
     data: bytes
 
 
+def check_upload_allowed(owner, size_bytes: int) -> None:
+    """Guests are anonymous, so they get a smaller allowance than registered users."""
+    limit = settings.GUEST_MAX_UPLOAD_BYTES if is_guest(owner) else settings.MAX_UPLOAD_BYTES
+    if size_bytes > limit:
+        raise UploadLimitError(f"file too large; max {limit // 1024} KB")
+    if is_guest(owner) and Document.objects.filter(owner=owner).count() >= settings.GUEST_MAX_DOCUMENTS:
+        raise UploadLimitError(
+            f"guests can keep up to {settings.GUEST_MAX_DOCUMENTS} documents; delete one or sign up"
+        )
+
+
 def ingest(owner, upload: Upload) -> Document:
+    check_upload_allowed(owner, len(upload.data))
     sha = hashlib.sha256(upload.data).hexdigest()
     existing = Document.objects.filter(owner=owner, sha256=sha).first()
     if existing:
@@ -49,6 +69,7 @@ def ingest(owner, upload: Upload) -> Document:
     if not pieces:
         raise IngestionError("document contains no extractable text")
 
+    budget.ensure_available()
     provider = get_provider()
     vectors: list[list[float]] = []
     tokens = 0
@@ -60,6 +81,8 @@ def ingest(owner, upload: Upload) -> Document:
     except ProviderError:
         logger.exception("embedding failed for %s", upload.title)
         raise
+    finally:
+        budget.record(embedding_cost(Usage(input_tokens=tokens)))
 
     with transaction.atomic():
         doc = Document.objects.create(

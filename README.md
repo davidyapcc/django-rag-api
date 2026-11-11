@@ -2,9 +2,11 @@
 
 A small, production-shaped **document Q&A API**. Upload documents, then ask questions and get answers grounded in those documents, with citations back to the exact chunks used.
 
-Built with Django, Django REST Framework, PostgreSQL + [pgvector](https://github.com/pgvector/pgvector) and the OpenAI API.
+Built with Django, Django REST Framework, PostgreSQL + [pgvector](https://github.com/pgvector/pgvector), the OpenAI API and an HTMX web UI.
 
 [![CI](https://github.com/davidyapcc/django-rag-api/actions/workflows/ci.yml/badge.svg)](https://github.com/davidyapcc/django-rag-api/actions/workflows/ci.yml)
+
+![The demo workspace: documents, a cited answer, and query history](docs/screenshot.png)
 
 ## What it does
 
@@ -13,6 +15,8 @@ Built with Django, Django REST Framework, PostgreSQL + [pgvector](https://github
 - **Ask:** the question is embedded, the top-k nearest chunks are retrieved for that user only, and the LLM answers using **structured output** (`answer` + `cited_chunk_ids`). Citations are checked against the retrieved set, so a hallucinated id never reaches the client.
 - **Cost and usage logging:** every query records input/output/embedding tokens, USD cost and latency. `GET /queries/usage/` totals them.
 - **Guardrails:** a relevance cut-off means the model is never called when nothing relevant is retrieved. Retrieved text is fenced and treated as data, not instructions (prompt-injection hygiene). There are per-user rate limits on `/ask` and uploads, and an upload size cap.
+- **Web demo:** a server-rendered UI (Django templates + HTMX) with one-click **Guest** accounts that expire after 24 hours, **Sample documents** with suggested questions, and answers that expand to show the cited chunks and what the question cost.
+- **Demo budget:** a global cap on LLM spend per UTC day (`DEMO_DAILY_BUDGET_USD`, default USD 0.50). Once reached, new questions and uploads are declined until the next day, through both the UI and the API.
 - **Offline mode:** `LLM_PROVIDER=fake` swaps in a deterministic local provider, so tests, CI and the eval need no API key.
 
 ## Architecture
@@ -35,10 +39,18 @@ flowchart LR
 | Layer | Where |
 | --- | --- |
 | HTTP, validation, permissions, throttling | `apps/*/views.py`, `serializers.py` |
+| Web UI (session auth, same services as the API) | `apps/web/` |
+| Guests and the Demo budget | `apps/accounts/services.py`, `apps/core/budget.py` |
 | Business logic (ingest, retrieve, answer) | `apps/documents/services.py`, `apps/qa/services.py` |
 | Provider interface + OpenAI and Fake implementations | `rag/providers.py` |
 | Chunking, extraction, pricing | `rag/` |
 | Golden-question eval | `evals/` |
+
+## Web UI
+
+`/` is the landing page. "Try it as a guest" creates a throwaway account and opens `/app/`, which has three panels: **Documents** (load samples, upload, delete), **Ask** (answer, expandable citations, tokens, cost and latency) and **History** (recent questions and total cost).
+
+The pages use Django session login and call the same service functions as the API, so tenant isolation, citation checks, rate limits and the Demo budget apply to both. Guests get a smaller allowance (5 documents, 500 KB per upload). Expired Guests are deleted whenever a new Guest is created, since the free host has no scheduler; `manage.py purge_guests` does the same on demand. The domain vocabulary lives in [`CONTEXT.md`](CONTEXT.md).
 
 ## API
 
@@ -124,7 +136,7 @@ CI runs it with the offline provider, so a change to chunking, retrieval or the 
 
 1. Create a free [Neon](https://neon.tech) Postgres project and copy its connection string (keep `?sslmode=require`). The first migration runs `CREATE EXTENSION vector`.
 2. In OpenAI, create an API key and set a monthly usage limit.
-3. On [Render](https://render.com): **New > Blueprint**, select this repo. `render.yaml` defines a free Docker web service. Fill in `DATABASE_URL` and `OPENAI_API_KEY` when prompted.
+3. On [Render](https://render.com): **New > Blueprint**, select this repo. `render.yaml` defines a free Docker web service. Fill in `DATABASE_URL` and `OPENAI_API_KEY` when prompted. The Demo budget defaults to USD 0.50 a day; change `DEMO_DAILY_BUDGET_USD` to adjust it.
 4. Migrations run on container start. Health check: `/api/v1/health/`.
 
 The free Render instance sleeps after 15 idle minutes, so the first request after a pause takes about 30 seconds.
@@ -136,6 +148,8 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 - **Synchronous ingestion with a size cap (2 MB).** It keeps the system simple and is correct on platforms that throttle CPU after a response is sent. The next step at scale would be a queue (Celery, or Cloud Tasks) with a `processing` status.
 - **Provider interface.** OpenAI and the fake provider implement the same two methods (`embed`, `answer`). Swapping to another vendor is one class plus one setting. Each provider owns its relevance cut-off because embedding models differ in scale.
 - **Structured output plus server-side citation validation.** JSON-schema output removes brittle parsing, and filtering cited ids against what was actually retrieved means the API never returns a citation it can't back up.
+- **Spend tracked per day, apart from users.** The Demo budget reads a `DailySpend` ledger rather than summing users' queries, so deleting a Guest never hands budget back.
+- **Server-rendered UI over a separate SPA.** One deploy, no build step, and the UI reuses the service layer directly instead of re-implementing rules in JavaScript. HTMX and Pico.css are vendored as static files, so the page has no third-party runtime dependency.
 - **Cost logged per request, prices in config.** Prices change, so they're environment variables rather than code.
 
 ## Roadmap
@@ -143,6 +157,7 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 - Async ingestion with a job status and retries
 - Hybrid search (Postgres full-text + vector, reciprocal rank fusion)
 - Streaming answers (SSE)
+- Multi-turn conversations (follow-up questions that use earlier Queries)
 - Per-user monthly cost budget enforced at `/ask`
 - OpenTelemetry traces for each pipeline stage
 

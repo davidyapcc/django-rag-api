@@ -24,6 +24,10 @@ env = environ.Env(
     RAG_MAX_DISTANCE=(float, 0.75),
     THROTTLE_ASK=(str, "30/hour"),
     THROTTLE_UPLOAD=(str, "20/day"),
+    THROTTLE_GUEST=(str, "20/hour"),
+    DEMO_DAILY_BUDGET_USD=(float, 0.50),
+    GUEST_MAX_DOCUMENTS=(int, 5),
+    GUEST_MAX_UPLOAD_BYTES=(int, 500 * 1024),
 )
 environ.Env.read_env(BASE_DIR / ".env")
 
@@ -51,6 +55,7 @@ INSTALLED_APPS = [
     "apps.accounts",
     "apps.documents",
     "apps.qa",
+    "apps.web",
 ]
 
 MIDDLEWARE = [
@@ -118,6 +123,7 @@ REST_FRAMEWORK = {
         "ask": env("THROTTLE_ASK"),
         "upload": env("THROTTLE_UPLOAD"),
         "register": "10/hour",
+        "guest": env("THROTTLE_GUEST"),
     },
 }
 
@@ -145,6 +151,13 @@ EMBEDDING_PRICE_PER_MTOK = env("EMBEDDING_PRICE_PER_MTOK")
 MAX_UPLOAD_BYTES = env("MAX_UPLOAD_BYTES")
 RAG_TOP_K = env("RAG_TOP_K")
 RAG_MAX_DISTANCE = env("RAG_MAX_DISTANCE")
+DEMO_DAILY_BUDGET_USD = env("DEMO_DAILY_BUDGET_USD")  # 0 disables the cap
+GUEST_MAX_DOCUMENTS = env("GUEST_MAX_DOCUMENTS")
+GUEST_MAX_UPLOAD_BYTES = env("GUEST_MAX_UPLOAD_BYTES")
+
+LOGIN_URL = "web:login"
+LOGIN_REDIRECT_URL = "web:app"
+LOGOUT_REDIRECT_URL = "web:landing"
 
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
