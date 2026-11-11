@@ -4,6 +4,8 @@ A small, production-shaped **document Q&A API**. Upload documents, then ask ques
 
 Built with Django, Django REST Framework, PostgreSQL + [pgvector](https://github.com/pgvector/pgvector), the OpenAI API and an HTMX web UI.
 
+**Live demo:** [django-rag-api.onrender.com](https://django-rag-api.onrender.com/) (click "Try it as a guest"; free hosting, so the first load after an idle spell takes about 30 seconds).
+
 [![CI](https://github.com/davidyapcc/django-rag-api/actions/workflows/ci.yml/badge.svg)](https://github.com/davidyapcc/django-rag-api/actions/workflows/ci.yml)
 
 ![The demo workspace: documents, a cited answer, and query history](docs/screenshot.png)
