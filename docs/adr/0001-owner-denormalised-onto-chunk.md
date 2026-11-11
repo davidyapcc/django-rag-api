@@ -4,5 +4,5 @@ Retrieval is the one query where a cross-Owner leak would be both easy to write 
 
 ## Consequences
 
-- Every code path that creates a Chunk must set `owner` to its Document's Owner. Nothing in the schema enforces that they match, so a mismatch would silently show a Chunk to the wrong Owner. Tests guard it, not the database.
-- Moving a Document to another Owner (not supported today) would have to rewrite all of its Chunks too.
+- A composite foreign key, `(document_id, owner_id)` → `Document(id, owner_id)` (migration `documents/0003`), makes the database reject a Chunk whose Owner differs from its Document's. It exists only in SQL because Django can't model it, so it won't appear in the model's state; don't drop it while tidying migrations.
+- The key is `ON UPDATE CASCADE`, so if a Document ever changes Owner (not supported today), its Chunks follow in the same statement.

@@ -23,6 +23,8 @@ class Document(models.Model):
         ordering = ["-created_at"]
         constraints = [
             models.UniqueConstraint(fields=["owner", "sha256"], name="unique_document_per_owner"),
+            # Target of Chunk's composite foreign key (document_id, owner_id); see ADR 0001.
+            models.UniqueConstraint(fields=["id", "owner"], name="document_id_owner_key"),
         ]
 
     def __str__(self) -> str:
@@ -31,7 +33,8 @@ class Document(models.Model):
 
 class Chunk(models.Model):
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="chunks")
-    # Denormalised so retrieval can filter by owner without a join.
+    # Denormalised so retrieval can filter by owner without a join. A composite foreign key
+    # (migration 0003) keeps it equal to document.owner and follows ownership changes.
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
     index = models.PositiveIntegerField()
     text = models.TextField()

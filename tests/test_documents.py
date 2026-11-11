@@ -1,5 +1,7 @@
 import pytest
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError, transaction
 from rest_framework.test import APIClient
 
 from apps.documents.models import Chunk, Document
@@ -100,3 +102,17 @@ def test_upload_is_throttled(auth_api, monkeypatch):
     )
     assert first.status_code == 201
     assert second.status_code == 429
+
+
+def test_chunk_owner_must_match_its_document_owner(uploaded, other_user):
+    doc = Document.objects.get(pk=uploaded["id"])
+    with pytest.raises(IntegrityError), transaction.atomic():
+        Chunk.objects.create(
+            document=doc, owner=other_user, index=999, text="x", embedding=[0.0] * settings.EMBEDDING_DIM
+        )
+
+
+def test_moving_a_document_moves_its_chunks(uploaded, other_user):
+    doc = Document.objects.get(pk=uploaded["id"])
+    Document.objects.filter(pk=doc.pk).update(owner=other_user)
+    assert set(Chunk.objects.filter(document=doc).values_list("owner", flat=True)) == {other_user.pk}
