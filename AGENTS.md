@@ -24,4 +24,4 @@ A change is done when every gate in `.github/workflows/ci.yml` passes locally: r
 - `EMBEDDING_DIM` is baked into the `Chunk.embedding` column. Changing it needs a migration and re-embedding every document.
 - Chunk size, `max_distance` and the eval thresholds in `apps/qa/management/commands/run_eval.py` move together: tune retrieval against the eval, and raise a threshold only when the eval clears it with margin.
 - Ingestion is synchronous with a size cap on purpose (Render/Cloud Run throttle CPU after the response). Moving it to a queue is a design change: update the README trade-offs too.
-- Production settings force HTTPS redirects; `tests/conftest.py` turns that off, so new test fixtures go through it.
+- Production settings force HTTPS redirects. The autouse fixture in `tests/conftest.py` disables that and pins the fake provider for every test; keep new test-wide setup there.
