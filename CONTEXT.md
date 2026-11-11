@@ -47,9 +47,9 @@ An Owner created by one click with no sign-up, who expires 24 hours after creati
 _Avoid_: Anonymous user, demo account, trial user
 
 **Demo budget**:
-The global cap on LLM spend per UTC day across all Owners. Once it is reached, new Queries are declined until the next day.
+The global cap on LLM spend per UTC day across all Owners. Once it is reached, new Queries and uploads are declined until the next day.
 _Avoid_: Quota, rate limit (a rate limit is per Owner)
 
 **Allowance**:
-The share of one UTC day's Demo budget a single Owner may spend. Once an Owner's Allowance is used up, their new Queries are declined even if the Demo budget has room.
+The share of one UTC day's Demo budget a single Owner may spend. Once an Owner's Allowance is used up, their new Queries and uploads are declined even if the Demo budget has room.
 _Avoid_: Quota, per-user budget, credit
