@@ -11,6 +11,7 @@ A change is done when every gate in `.github/workflows/ci.yml` passes locally: r
 - **Tenant isolation.** Every query over `Document`, `Chunk` or `Query` filters by owner. `Chunk.owner` is denormalised so retrieval scopes by owner in the same SQL as the similarity search; set it on every chunk you create. Add a cross-user test for any new endpoint.
 - **Citations are verified.** `apps/qa/services.ask` keeps only cited ids that were actually retrieved. Model output never reaches the client unfiltered.
 - **Document text is data.** Retrieved chunks go to the model fenced as `<chunk>` and the system prompt says to ignore instructions inside them. Keep both when editing prompts.
+- **Traces carry no content.** Span names, attributes and events never include question, answer, document or chunk text, or document titles: traces leave the tenant boundary. Ids, counts, tokens, cost and distances are fine.
 - **Spend goes through the Demo budget.** Any new code path that calls the provider calls `budget.ensure_available()` before and `budget.record()` after (see `apps/core/budget.py`).
 - **Offline by default.** Tests, CI and the eval run on `FakeProvider`; stub the OpenAI client (see `tests/test_providers.py`) to test provider code. A live API call belongs only in a manual `run_eval` with `LLM_PROVIDER=openai`.
 

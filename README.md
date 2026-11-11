@@ -152,16 +152,19 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 - **Structured output plus server-side citation validation.** JSON-schema output removes brittle parsing, and filtering cited ids against what was actually retrieved means the API never returns a citation it can't back up.
 - **Spend tracked per day, apart from users.** The Demo budget reads a `DailySpend` ledger rather than summing users' queries, so deleting a Guest never hands budget back.
 - **Server-rendered UI over a separate SPA.** One deploy, no build step, and the UI reuses the service layer directly instead of re-implementing rules in JavaScript. HTMX and Pico.css are vendored as static files, so the page has no third-party runtime dependency.
+- **No streaming.** Citations are checked once the whole answer exists, so streaming would show claims before they're verified. Answers are a few sentences, so there's little to gain. See [`.out-of-scope/streaming-answers.md`](.out-of-scope/streaming-answers.md).
 - **Cost logged per request, prices in config.** Prices change, so they're environment variables rather than code.
 
 ## Roadmap
 
-- Async ingestion with a job status and retries
-- Hybrid search (Postgres full-text + vector, reciprocal rank fusion)
-- Streaming answers (SSE)
-- Multi-turn conversations (follow-up questions that use earlier Queries)
-- Per-user monthly cost budget enforced at `/ask`
-- OpenTelemetry traces for each pipeline stage
+In build order; each issue carries the agent brief.
+
+1. Per-Owner daily Allowance ([#6](https://github.com/davidyapcc/django-rag-api/issues/6))
+2. OpenTelemetry traces for each pipeline stage, with no document or question text in spans ([#7](https://github.com/davidyapcc/django-rag-api/issues/7))
+3. Hybrid search: Postgres full-text + vector, reciprocal rank fusion ([#8](https://github.com/davidyapcc/django-rag-api/issues/8))
+4. Follow-up questions that rewrite into a standalone question ([#9](https://github.com/davidyapcc/django-rag-api/issues/9))
+
+Considered and declined (reasons and what would reopen them are in [`.out-of-scope/`](.out-of-scope/)): async ingestion and streaming answers.
 
 ## License
 
