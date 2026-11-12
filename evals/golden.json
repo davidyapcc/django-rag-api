@@ -11,5 +11,8 @@
   {"question": "What does dough hydration mean?", "document": "sourdough.md", "expect": ["water divided"]},
   {"question": "How long does bulk fermentation take?", "document": "sourdough.md", "expect": ["four to six hours"]},
   {"question": "Why let the sourdough loaf cool before slicing?", "document": "sourdough.md", "expect": ["gummy"]},
-  {"question": "What is the capital city of Australia?", "document": null, "expect": []}
+  {"question": "Should I use WPA3?", "document": "home-network.md", "expect": ["WPA3"]},
+  {"question": "My neighbour told me the little WPS feature that lets gadgets join quickly is dangerous; is that true?", "document": "home-network.md", "expect": ["brute"]},
+  {"question": "What is the capital city of Australia?", "document": null, "expect": []},
+  {"question": "What was the hottest temperature ever recorded on the surface of Venus?", "document": null, "expect": []}
 ]

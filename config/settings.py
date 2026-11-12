@@ -22,6 +22,7 @@ env = environ.Env(
     MAX_UPLOAD_BYTES=(int, 2 * 1024 * 1024),
     RAG_TOP_K=(int, 5),
     RAG_MAX_DISTANCE=(float, 0.75),
+    RAG_MIN_TEXT_COVERAGE=(float, 0.6),
     THROTTLE_ASK=(str, "30/hour"),
     THROTTLE_UPLOAD=(str, "20/day"),
     THROTTLE_GUEST=(str, "20/hour"),
@@ -153,6 +154,8 @@ EMBEDDING_PRICE_PER_MTOK = env("EMBEDDING_PRICE_PER_MTOK")
 MAX_UPLOAD_BYTES = env("MAX_UPLOAD_BYTES")
 RAG_TOP_K = env("RAG_TOP_K")
 RAG_MAX_DISTANCE = env("RAG_MAX_DISTANCE")
+# Full-text gate of hybrid retrieval: share of the question's terms a Chunk must contain (ADR 0004).
+RAG_MIN_TEXT_COVERAGE = env("RAG_MIN_TEXT_COVERAGE")
 DEMO_DAILY_BUDGET_USD = env("DEMO_DAILY_BUDGET_USD")  # 0 disables the cap
 # Each Owner's share of the Demo budget per UTC day; 0 disables it.
 ALLOWANCE_DAILY_USD = env("ALLOWANCE_DAILY_USD")

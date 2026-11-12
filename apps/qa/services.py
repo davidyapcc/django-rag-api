@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 
 from django.conf import settings
+from django.db import connection
 from pgvector.django import CosineDistance
 
 from apps.core import budget
@@ -21,24 +22,93 @@ logger = logging.getLogger(__name__)
 NO_ANSWER = "I don't know based on the uploaded documents."
 
 
+RRF_K = 60  # the usual reciprocal rank fusion constant; only orders candidates, never gates them
+
+# Full-text gate: the share of the question's lexemes (english stems, stopwords dropped) that a
+# Chunk contains. Postgres ranks have no IDF, so a share separates "names the rare term the
+# question is about" from "shares one common word" where ts_rank_cd cannot (ADR 0004).
+_TEXT_GATE_SQL = """
+WITH q AS (
+    SELECT lex, (SELECT string_agg(quote_literal(l), ' | ')::tsquery FROM unnest(lex) l) AS any_term
+    FROM (SELECT tsvector_to_array(to_tsvector('english', %(question)s)) AS lex) t
+    WHERE cardinality(lex) > 0
+), matches AS (
+    SELECT c.id,
+           (SELECT count(*) FROM unnest(q.lex) l WHERE c.search @@ quote_literal(l)::tsquery)::float
+               / cardinality(q.lex) AS coverage,
+           ts_rank_cd(c.search, q.any_term) AS rank
+    FROM documents_chunk c, q
+    WHERE c.owner_id = %(owner_id)s
+      AND (%(document_ids)s::bigint[] IS NULL OR c.document_id = ANY(%(document_ids)s::bigint[]))
+      AND c.search @@ q.any_term
+)
+SELECT id, coverage FROM matches
+WHERE coverage >= %(min_coverage)s
+ORDER BY coverage DESC, rank DESC, id
+LIMIT %(top_k)s
+"""
+
+
 @dataclass(frozen=True)
 class RetrievedChunk:
     chunk: Chunk
-    distance: float
+    score: float  # reciprocal rank fusion; higher is better
+    distance: float | None  # set when the Chunk passed the vector gate
+    text_coverage: float | None  # set when the Chunk passed the full-text gate
+
+
+def _vector_gate(owner, question_vector, top_k, max_distance, document_ids) -> list[tuple[int, float]]:
+    qs = Chunk.objects.filter(owner=owner)
+    if document_ids:
+        qs = qs.filter(document_id__in=document_ids)
+    rows = (
+        qs.annotate(distance=CosineDistance("embedding", question_vector))
+        .order_by("distance")
+        .values_list("id", "distance")[:top_k]
+    )
+    return [(pk, float(d)) for pk, d in rows if d <= max_distance]
+
+
+def _text_gate(owner, question, top_k, min_coverage, document_ids) -> list[tuple[int, float]]:
+    params = {
+        "question": question,
+        "owner_id": owner.pk,
+        "document_ids": list(document_ids) if document_ids else None,
+        "min_coverage": min_coverage,
+        "top_k": top_k,
+    }
+    with connection.cursor() as cursor:
+        cursor.execute(_TEXT_GATE_SQL, params)
+        return [(pk, float(coverage)) for pk, coverage in cursor.fetchall()]
 
 
 def retrieve(
     owner,
+    question: str,
     question_vector: list[float],
     top_k: int,
     max_distance: float,
     document_ids: list[int] | None = None,
 ) -> list[RetrievedChunk]:
-    qs = Chunk.objects.filter(owner=owner).select_related("document")
-    if document_ids:
-        qs = qs.filter(document_id__in=document_ids)
-    qs = qs.annotate(distance=CosineDistance("embedding", question_vector)).order_by("distance")[:top_k]
-    return [RetrievedChunk(c, float(c.distance)) for c in qs if c.distance <= max_distance]
+    """Hybrid retrieval. A Chunk is a candidate if it passes either gate: vector distance within
+    the provider's max_distance, or full-text coverage of the question at or above
+    RAG_MIN_TEXT_COVERAGE. Both gates scope by Owner in their own SQL. Candidates are ordered by
+    reciprocal rank fusion; no candidates means the caller Abstains."""
+    vector = _vector_gate(owner, question_vector, top_k, max_distance, document_ids)
+    text = _text_gate(owner, question, top_k, settings.RAG_MIN_TEXT_COVERAGE, document_ids)
+
+    scores: dict[int, float] = {}
+    for ranked in (vector, text):
+        for rank, (pk, _) in enumerate(ranked, start=1):
+            scores[pk] = scores.get(pk, 0.0) + 1.0 / (RRF_K + rank)
+    best = sorted(scores, key=lambda pk: (-scores[pk], pk))[:top_k]
+    chunks = Chunk.objects.filter(owner=owner).select_related("document").in_bulk(best)
+    distances, coverages = dict(vector), dict(text)
+    return [
+        RetrievedChunk(chunks[pk], scores[pk], distances.get(pk), coverages.get(pk))
+        for pk in best
+        if pk in chunks
+    ]
 
 
 def ask(owner, question: str, document_ids: list[int] | None = None, top_k: int | None = None) -> Query:
@@ -65,11 +135,13 @@ def _ask(owner, question: str, document_ids: list[int] | None, top_k: int | None
         embedded = provider.embed([question])
         set_attributes(span, llm__embedding_tokens=embedded.usage.input_tokens)
     with stage("ask.retrieve", top_k=top_k, max_distance=provider.max_distance) as span:
-        hits = retrieve(owner, embedded.vectors[0], top_k, provider.max_distance, document_ids)
+        hits = retrieve(owner, question, embedded.vectors[0], top_k, provider.max_distance, document_ids)
         set_attributes(
             span,
             retrieved_count=len(hits),
-            min_distance=min((h.distance for h in hits), default=None),
+            vector_count=sum(h.distance is not None for h in hits),
+            text_count=sum(h.text_coverage is not None for h in hits),
+            min_distance=min((h.distance for h in hits if h.distance is not None), default=None),
         )
 
     if hits:

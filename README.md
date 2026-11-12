@@ -13,11 +13,11 @@ Built with Django, Django REST Framework, PostgreSQL + [pgvector](https://github
 ## What it does
 
 - **Auth:** registration plus JWT access/refresh tokens. Every document, chunk and query is scoped to its owner.
-- **Ingestion:** upload `.txt`, `.md` or `.pdf`, then the API extracts text, splits it into overlapping chunks, embeds them and stores the vectors in Postgres (HNSW index, cosine distance). Duplicate uploads are detected by SHA-256.
-- **Ask:** the question is embedded, the top-k nearest chunks are retrieved for that user only, and the LLM answers using **structured output** (`answer` + `cited_chunk_ids`). Citations are checked against the retrieved set, so a hallucinated id never reaches the client.
+- **Ingestion:** upload `.txt`, `.md` or `.pdf`, then the API extracts text, splits it into overlapping chunks, embeds them and stores the vectors in Postgres (HNSW index, cosine distance) alongside a generated full-text column (GIN index). Duplicate uploads are detected by SHA-256.
+- **Ask:** **hybrid retrieval** for that user only: a chunk is a candidate if it is near the question's embedding **or** contains most of the question's terms (so exact names, codes and ids that embeddings miss still match), and reciprocal rank fusion orders the candidates. The LLM then answers using **structured output** (`answer` + `cited_chunk_ids`). Citations are checked against the retrieved set, so a hallucinated id never reaches the client.
 - **Cost and usage logging:** every query records input/output/embedding tokens, USD cost and latency. `GET /queries/usage/` totals them.
 - **Tracing (optional):** OpenTelemetry spans for each pipeline stage (extract, chunk, embed, store; embed, retrieve, answer) under the request span, with tokens, cost and distances. Spans never carry question, answer or document text, or titles. Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
-- **Guardrails:** a relevance cut-off means the model is never called when nothing relevant is retrieved. Retrieved text is fenced and treated as data, not instructions (prompt-injection hygiene). There are per-user rate limits on `/ask` and uploads, and an upload size cap.
+- **Guardrails:** relevance cut-offs on both retrieval gates mean the model is never called when nothing relevant is retrieved. Retrieved text is fenced and treated as data, not instructions (prompt-injection hygiene). There are per-user rate limits on `/ask` and uploads, and an upload size cap.
 - **Web demo:** a server-rendered UI (Django templates + HTMX) with one-click **Guest** accounts that expire after 24 hours, **Sample documents** with suggested questions, and answers that expand to show the cited chunks and what the question cost.
 - **Demo budget and Allowance:** a global cap on LLM spend per UTC day (`DEMO_DAILY_BUDGET_USD`, default USD 0.50), and each Owner's daily share of it (`ALLOWANCE_DAILY_USD`, default USD 0.10; `GUEST_ALLOWANCE_DAILY_USD`, USD 0.05 for Guests), so one person can't use up the demo for everyone. Once either is reached, new questions and uploads are declined until the next UTC day, through both the UI and the API.
 - **Offline mode:** `LLM_PROVIDER=fake` swaps in a deterministic local provider, so tests, CI and the eval need no API key.
@@ -31,10 +31,10 @@ flowchart LR
     ING --> EX[Extract text<br/>txt / md / pdf]
     EX --> CH[Chunk<br/>800 chars, 150 overlap]
     CH --> P[(LLM provider<br/>OpenAI or Fake)]
-    P -->|embeddings| DB[(PostgreSQL + pgvector<br/>HNSW cosine index)]
+    P -->|embeddings| DB[(PostgreSQL + pgvector<br/>HNSW cosine + GIN full-text)]
     API --> QA[Ask service]
     QA -->|embed question| P
-    QA -->|top-k, owner-scoped| DB
+    QA -->|vector OR full-text, RRF, owner-scoped| DB
     QA -->|structured answer + citations| P
     QA --> LOG[(Query log<br/>tokens, cost, latency)]
 ```
@@ -149,6 +149,7 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 ## Design decisions and trade-offs
 
 - **pgvector instead of a separate vector database.** One datastore, transactional ingestion (a document and all of its chunks commit together or not at all), and owner filtering in the same SQL query as the similarity search. For this scale an HNSW index on Postgres is plenty.
+- **Hybrid search with two gates, not one fused cut-off.** Each gate has its own relevance floor (vector distance, share of the question's terms) and fusion only orders what passed, so the model is still never called for an off-topic question. The full-text floor is a share of terms rather than `ts_rank_cd` because Postgres ranks have no IDF. See [ADR 0004](docs/adr/0004-hybrid-search-two-gates-and-a-coverage-floor.md).
 - **`owner` denormalised onto `Chunk`.** Retrieval filters by owner without a join, and tenant isolation is enforced in the one query that matters. A composite foreign key to `Document(id, owner)` stops the copy from drifting from its document's owner.
 - **Synchronous ingestion with a size cap (2 MB).** It keeps the system simple and is correct on platforms that throttle CPU after a response is sent. The next step at scale would be a queue (Celery, or Cloud Tasks) with a `processing` status.
 - **Provider interface.** OpenAI and the fake provider implement the same two methods (`embed`, `answer`). Swapping to another vendor is one class plus one setting. Each provider owns its relevance cut-off because embedding models differ in scale.
@@ -163,9 +164,8 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 
 In build order; each issue carries the agent brief.
 
-1. Hybrid search: Postgres full-text + vector, reciprocal rank fusion ([#8](https://github.com/davidyapcc/django-rag-api/issues/8))
-2. Follow-up questions that rewrite into a standalone question ([#9](https://github.com/davidyapcc/django-rag-api/issues/9))
-3. Async ingestion through a push queue (QStash), so no worker is needed on the free host ([#11](https://github.com/davidyapcc/django-rag-api/issues/11))
+1. Follow-up questions that rewrite into a standalone question ([#9](https://github.com/davidyapcc/django-rag-api/issues/9))
+2. Async ingestion through a push queue (QStash), so no worker is needed on the free host ([#11](https://github.com/davidyapcc/django-rag-api/issues/11))
 
 Considered and declined (reasons and what would reopen them are in [`.out-of-scope/`](.out-of-scope/)): streaming answers.
 
