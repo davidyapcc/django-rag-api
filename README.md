@@ -16,6 +16,7 @@ Built with Django, Django REST Framework, PostgreSQL + [pgvector](https://github
 - **Ingestion:** upload `.txt`, `.md` or `.pdf`, then the API extracts text, splits it into overlapping chunks, embeds them and stores the vectors in Postgres (HNSW index, cosine distance). Duplicate uploads are detected by SHA-256.
 - **Ask:** the question is embedded, the top-k nearest chunks are retrieved for that user only, and the LLM answers using **structured output** (`answer` + `cited_chunk_ids`). Citations are checked against the retrieved set, so a hallucinated id never reaches the client.
 - **Cost and usage logging:** every query records input/output/embedding tokens, USD cost and latency. `GET /queries/usage/` totals them.
+- **Tracing (optional):** OpenTelemetry spans for each pipeline stage (extract, chunk, embed, store; embed, retrieve, answer) under the request span, with tokens, cost and distances. Spans never carry question, answer or document text, or titles. Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 - **Guardrails:** a relevance cut-off means the model is never called when nothing relevant is retrieved. Retrieved text is fenced and treated as data, not instructions (prompt-injection hygiene). There are per-user rate limits on `/ask` and uploads, and an upload size cap.
 - **Web demo:** a server-rendered UI (Django templates + HTMX) with one-click **Guest** accounts that expire after 24 hours, **Sample documents** with suggested questions, and answers that expand to show the cited chunks and what the question cost.
 - **Demo budget and Allowance:** a global cap on LLM spend per UTC day (`DEMO_DAILY_BUDGET_USD`, default USD 0.50), and each Owner's daily share of it (`ALLOWANCE_DAILY_USD`, default USD 0.10; `GUEST_ALLOWANCE_DAILY_USD`, USD 0.05 for Guests), so one person can't use up the demo for everyone. Once either is reached, new questions and uploads are declined until the next UTC day, through both the UI and the API.
@@ -45,7 +46,8 @@ flowchart LR
 | Guests, the Demo budget and Allowances | `apps/accounts/services.py`, `apps/core/budget.py` |
 | Business logic (ingest, retrieve, answer) | `apps/documents/services.py`, `apps/qa/services.py` |
 | Provider interface + OpenAI and Fake implementations | `rag/providers.py` |
-| Chunking, extraction, pricing | `rag/` |
+| Chunking, extraction, pricing, pipeline spans | `rag/` |
+| Tracing setup (off unless an OTLP endpoint is set) | `apps/core/tracing.py` |
 | Golden-question eval | `evals/` |
 
 ## Web UI
@@ -140,6 +142,7 @@ CI runs it with the offline provider, so a change to chunking, retrieval or the 
 2. In OpenAI, create an API key and set a monthly usage limit.
 3. On [Render](https://render.com): **New > Blueprint**, select this repo. `render.yaml` defines a free Docker web service. Fill in `DATABASE_URL` and `OPENAI_API_KEY` when prompted. The Demo budget defaults to USD 0.50 a day and each Owner's Allowance to USD 0.10 (USD 0.05 for Guests); change `DEMO_DAILY_BUDGET_USD`, `ALLOWANCE_DAILY_USD` and `GUEST_ALLOWANCE_DAILY_USD` to adjust them.
 4. Migrations run on container start. Health check: `/api/v1/health/`.
+5. Optional tracing: set `OTEL_EXPORTER_OTLP_ENDPOINT` (and `OTEL_EXPORTER_OTLP_HEADERS` for the backend's API key) to any OTLP/HTTP backend, such as Grafana Cloud or Honeycomb. `OTEL_SERVICE_NAME` defaults to `django-rag-api`. With no endpoint, tracing does nothing.
 
 The free Render instance sleeps after 15 idle minutes, so the first request after a pause takes about a minute.
 
@@ -160,10 +163,9 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 
 In build order; each issue carries the agent brief.
 
-1. OpenTelemetry traces for each pipeline stage, with no document or question text in spans ([#7](https://github.com/davidyapcc/django-rag-api/issues/7))
-2. Hybrid search: Postgres full-text + vector, reciprocal rank fusion ([#8](https://github.com/davidyapcc/django-rag-api/issues/8))
-3. Follow-up questions that rewrite into a standalone question ([#9](https://github.com/davidyapcc/django-rag-api/issues/9))
-4. Async ingestion through a push queue (QStash), so no worker is needed on the free host ([#11](https://github.com/davidyapcc/django-rag-api/issues/11))
+1. Hybrid search: Postgres full-text + vector, reciprocal rank fusion ([#8](https://github.com/davidyapcc/django-rag-api/issues/8))
+2. Follow-up questions that rewrite into a standalone question ([#9](https://github.com/davidyapcc/django-rag-api/issues/9))
+3. Async ingestion through a push queue (QStash), so no worker is needed on the free host ([#11](https://github.com/davidyapcc/django-rag-api/issues/11))
 
 Considered and declined (reasons and what would reopen them are in [`.out-of-scope/`](.out-of-scope/)): streaming answers.
 

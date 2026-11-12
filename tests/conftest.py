@@ -6,6 +6,8 @@ from rest_framework.test import APIClient
 
 from rag import providers
 
+_span_exporter = None
+
 
 @pytest.fixture(autouse=True)
 def _fake_provider(settings):
@@ -60,3 +62,21 @@ def uploaded(auth_api, coffee_file):
     resp = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart")
     assert resp.status_code == 201, resp.content
     return resp.json()
+
+
+@pytest.fixture
+def spans():
+    """Finished spans, captured in memory. Tracing is off unless an OTLP endpoint is set, so the
+    first use installs an in-memory tracer provider (and Django instrumentation) for the session."""
+    global _span_exporter
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from apps.core.tracing import configure
+
+    if _span_exporter is None:
+        _span_exporter = InMemorySpanExporter()
+        configure(SimpleSpanProcessor(_span_exporter))
+    _span_exporter.clear()
+    yield _span_exporter
+    _span_exporter.clear()

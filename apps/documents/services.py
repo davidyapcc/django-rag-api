@@ -13,6 +13,7 @@ from rag.chunking import chunk_text
 from rag.extraction import ExtractionError, extract_text
 from rag.pricing import embedding_cost
 from rag.providers import ProviderError, get_provider
+from rag.tracing import set_attributes, stage
 from rag.types import Usage
 
 from .models import Chunk, Document
@@ -55,17 +56,27 @@ def check_upload_allowed(owner, size_bytes: int) -> None:
 
 
 def ingest(owner, upload: Upload) -> Document:
+    with stage("ingest", owner__id=owner.pk, document__size_bytes=len(upload.data)) as span:
+        doc = _ingest(owner, upload)
+        set_attributes(span, document__id=doc.pk, document__chunk_count=doc.chunk_count)
+        return doc
+
+
+def _ingest(owner, upload: Upload) -> Document:
     check_upload_allowed(owner, len(upload.data))
     sha = hashlib.sha256(upload.data).hexdigest()
     existing = Document.objects.filter(owner=owner, sha256=sha).first()
     if existing:
         raise DuplicateDocumentError(existing)
 
-    try:
-        text = extract_text(upload.data, upload.content_type)
-    except ExtractionError as exc:
-        raise IngestionError(str(exc)) from exc
-    pieces = chunk_text(text)
+    with stage("ingest.extract", document__content_type=upload.content_type):
+        try:
+            text = extract_text(upload.data, upload.content_type)
+        except ExtractionError as exc:
+            raise IngestionError(str(exc)) from exc
+    with stage("ingest.chunk") as span:
+        pieces = chunk_text(text)
+        set_attributes(span, chunk_count=len(pieces))
     if not pieces:
         raise IngestionError("document contains no extractable text")
 
@@ -73,18 +84,21 @@ def ingest(owner, upload: Upload) -> Document:
     provider = get_provider()
     vectors: list[list[float]] = []
     tokens = 0
-    try:
-        for start in range(0, len(pieces), EMBED_BATCH_SIZE):
-            result = provider.embed(pieces[start : start + EMBED_BATCH_SIZE])
-            vectors.extend(result.vectors)
-            tokens += result.usage.input_tokens
-    except ProviderError:
-        logger.exception("embedding failed for %s", upload.title)
-        raise
-    finally:
-        budget.record(owner, embedding_cost(Usage(input_tokens=tokens)))
+    with stage("ingest.embed", llm__provider=provider.name, chunk_count=len(pieces)) as span:
+        try:
+            for start in range(0, len(pieces), EMBED_BATCH_SIZE):
+                result = provider.embed(pieces[start : start + EMBED_BATCH_SIZE])
+                vectors.extend(result.vectors)
+                tokens += result.usage.input_tokens
+        except ProviderError:
+            logger.exception("embedding failed for %s", upload.title)
+            raise
+        finally:
+            cost = embedding_cost(Usage(input_tokens=tokens))
+            set_attributes(span, llm__embedding_tokens=tokens, cost_usd=float(cost))
+            budget.record(owner, cost)
 
-    with transaction.atomic():
+    with stage("ingest.store", chunk_count=len(pieces)), transaction.atomic():
         doc = Document.objects.create(
             owner=owner,
             title=upload.title,
