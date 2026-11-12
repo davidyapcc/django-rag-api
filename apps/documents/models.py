@@ -1,4 +1,6 @@
 from django.conf import settings
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVector, SearchVectorField
 from django.db import models
 from pgvector.django import HnswIndex, VectorField
 
@@ -39,6 +41,13 @@ class Chunk(models.Model):
     index = models.PositiveIntegerField()
     text = models.TextField()
     embedding = VectorField(dimensions=settings.EMBEDDING_DIM)
+    # Full-text side of hybrid retrieval (ADR 0004). Generated, so existing Chunks get it from
+    # the migration with no re-embedding.
+    search = models.GeneratedField(
+        expression=SearchVector("text", config="english"),
+        output_field=SearchVectorField(),
+        db_persist=True,
+    )
 
     class Meta:
         ordering = ["document_id", "index"]
@@ -53,6 +62,7 @@ class Chunk(models.Model):
                 ef_construction=64,
                 opclasses=["vector_cosine_ops"],
             ),
+            GinIndex(name="chunk_search_gin", fields=["search"]),
         ]
 
     def __str__(self) -> str:
