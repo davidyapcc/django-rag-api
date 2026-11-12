@@ -25,3 +25,7 @@ services:
         value: 10/day
       - key: DEMO_DAILY_BUDGET_USD
         value: "0.50"
+      - key: ALLOWANCE_DAILY_USD
+        value: "0.10"
+      - key: GUEST_ALLOWANCE_DAILY_USD
+        value: "0.05"
