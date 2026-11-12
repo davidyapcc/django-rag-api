@@ -141,7 +141,7 @@ CI runs it with the offline provider, so a change to chunking, retrieval or the 
 3. On [Render](https://render.com): **New > Blueprint**, select this repo. `render.yaml` defines a free Docker web service. Fill in `DATABASE_URL` and `OPENAI_API_KEY` when prompted. The Demo budget defaults to USD 0.50 a day; change `DEMO_DAILY_BUDGET_USD` to adjust it.
 4. Migrations run on container start. Health check: `/api/v1/health/`.
 
-The free Render instance sleeps after 15 idle minutes, so the first request after a pause takes about 30 seconds.
+The free Render instance sleeps after 15 idle minutes, so the first request after a pause takes about a minute.
 
 ## Design decisions and trade-offs
 
