@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import openai
 import pytest
+from opentelemetry.trace import SpanKind, StatusCode
 
 from rag import providers
 from rag.pricing import chat_cost, embedding_cost
@@ -62,6 +63,7 @@ def openai_provider(settings):
 
 def test_openai_embed_orders_by_index(openai_provider):
     openai_provider.client.embeddings.create.return_value = SimpleNamespace(
+        model="embed-test",
         data=[SimpleNamespace(index=1, embedding=[2.0]), SimpleNamespace(index=0, embedding=[1.0])],
         usage=SimpleNamespace(prompt_tokens=7),
     )
@@ -72,8 +74,11 @@ def test_openai_embed_orders_by_index(openai_provider):
 
 def _chat_response(content, refusal=None):
     return SimpleNamespace(
+        id="chatcmpl-test",
         model="gpt-test",
-        choices=[SimpleNamespace(message=SimpleNamespace(content=content, refusal=refusal))],
+        choices=[
+            SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content=content, refusal=refusal))
+        ],
         usage=SimpleNamespace(prompt_tokens=100, completion_tokens=20),
     )
 
@@ -110,6 +115,43 @@ def test_openai_api_errors_are_wrapped(openai_provider, method):
     openai_provider.client.chat.completions.create.side_effect = err
     with pytest.raises(ProviderError):
         openai_provider.embed(["x"]) if method == "embed" else openai_provider.answer("q", [])
+
+
+def test_openai_calls_are_genai_client_spans(spans, openai_provider):
+    openai_provider.embedding_model = "embed-test"
+    openai_provider.chat_model = "gpt-test"
+    openai_provider.client.embeddings.create.return_value = SimpleNamespace(
+        model="embed-test",
+        data=[SimpleNamespace(index=0, embedding=[1.0])],
+        usage=SimpleNamespace(prompt_tokens=7),
+    )
+    openai_provider.client.chat.completions.create.return_value = _chat_response(
+        json.dumps({"answer": "Use 90C.", "cited_chunk_ids": [3]})
+    )
+    openai_provider.embed(["secret question"])
+    openai_provider.answer("secret question", [ContextChunk(3, "secret title", "secret chunk")])
+    by_name = {s.name: s for s in spans.get_finished_spans()}
+    embed, chat = by_name["embeddings embed-test"], by_name["chat gpt-test"]
+    assert embed.kind == chat.kind == SpanKind.CLIENT
+    assert embed.attributes["gen_ai.provider.name"] == "openai"
+    assert embed.attributes["gen_ai.usage.input_tokens"] == 7
+    assert chat.attributes["gen_ai.operation.name"] == "chat"
+    assert chat.attributes["gen_ai.response.model"] == "gpt-test"
+    assert chat.attributes["gen_ai.usage.output_tokens"] == 20
+    assert tuple(chat.attributes["gen_ai.response.finish_reasons"]) == ("stop",)
+    text = " ".join(f"{s.name} {dict(s.attributes or {})}" for s in spans.get_finished_spans())
+    assert "secret" not in text
+
+
+def test_failed_openai_call_marks_the_span(spans, openai_provider):
+    openai_provider.client.chat.completions.create.side_effect = openai.APIConnectionError(
+        request=MagicMock()
+    )
+    with pytest.raises(ProviderError):
+        openai_provider.answer("q", [])
+    (span,) = spans.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes["error.type"] == "ProviderError"
 
 
 def test_pricing(settings):

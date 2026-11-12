@@ -15,6 +15,7 @@ from typing import Protocol
 
 from django.conf import settings
 
+from .tracing import llm_call, set_attributes
 from .types import AnswerResult, ContextChunk, EmbeddingResult, Usage
 
 SYSTEM_PROMPT = """You answer questions using only the numbered context chunks provided.
@@ -123,14 +124,21 @@ class OpenAIProvider:
         self.max_distance = settings.RAG_MAX_DISTANCE
 
     def embed(self, texts: list[str]) -> EmbeddingResult:
-        try:
-            resp = self.client.embeddings.create(
-                model=self.embedding_model,
-                input=texts,
-                dimensions=settings.EMBEDDING_DIM,
+        with llm_call("embeddings", self.name, self.embedding_model) as span:
+            try:
+                resp = self.client.embeddings.create(
+                    model=self.embedding_model,
+                    input=texts,
+                    dimensions=settings.EMBEDDING_DIM,
+                )
+            except self._openai.OpenAIError as exc:
+                raise ProviderError(f"embedding failed: {exc}") from exc
+            set_attributes(
+                span,
+                gen_ai__response__model=resp.model,
+                gen_ai__usage__input_tokens=resp.usage.prompt_tokens,
+                gen_ai__embeddings__dimension__count=settings.EMBEDDING_DIM,
             )
-        except self._openai.OpenAIError as exc:
-            raise ProviderError(f"embedding failed: {exc}") from exc
         ordered = sorted(resp.data, key=lambda d: d.index)
         return EmbeddingResult(
             vectors=[d.embedding for d in ordered],
@@ -141,22 +149,31 @@ class OpenAIProvider:
         context = "\n\n".join(
             f'<chunk id="{c.id}" document="{c.document_title}">\n{c.text}\n</chunk>' for c in chunks
         )
-        try:
-            resp = self.client.chat.completions.create(
-                model=self.chat_model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {"name": "cited_answer", "strict": True, "schema": ANSWER_SCHEMA},
-                },
+        with llm_call("chat", self.name, self.chat_model) as span:
+            try:
+                resp = self.client.chat.completions.create(
+                    model=self.chat_model,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
+                    ],
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {"name": "cited_answer", "strict": True, "schema": ANSWER_SCHEMA},
+                    },
+                )
+            except self._openai.OpenAIError as exc:
+                raise ProviderError(f"chat completion failed: {exc}") from exc
+            choice = resp.choices[0]
+            set_attributes(
+                span,
+                gen_ai__response__id=resp.id,
+                gen_ai__response__model=resp.model,
+                gen_ai__response__finish_reasons=[choice.finish_reason] if choice.finish_reason else None,
+                gen_ai__usage__input_tokens=resp.usage.prompt_tokens if resp.usage else None,
+                gen_ai__usage__output_tokens=resp.usage.completion_tokens if resp.usage else None,
             )
-        except self._openai.OpenAIError as exc:
-            raise ProviderError(f"chat completion failed: {exc}") from exc
 
-        choice = resp.choices[0]
         if choice.message.refusal:
             raise ProviderError("model refused to answer")
         try:
