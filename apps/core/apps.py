@@ -5,6 +5,7 @@ class CoreConfig(AppConfig):
     name = "apps.core"
 
     def ready(self) -> None:
-        from .tracing import configure
+        from . import errors, tracing
 
-        configure()
+        tracing.configure()
+        errors.configure()

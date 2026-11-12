@@ -77,6 +77,12 @@ def spans():
     if _span_exporter is None:
         _span_exporter = InMemorySpanExporter()
         configure(SimpleSpanProcessor(_span_exporter))
+    # configure() wraps psycopg.connect, which misses a connection the test run opened earlier.
+    from django.db import connection
+    from opentelemetry.instrumentation.psycopg import PsycopgInstrumentor
+
+    if connection.connection is not None:
+        PsycopgInstrumentor.instrument_connection(connection.connection)
     _span_exporter.clear()
     yield _span_exporter
     _span_exporter.clear()

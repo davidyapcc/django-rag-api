@@ -8,13 +8,18 @@ import os
 
 from opentelemetry import trace
 from opentelemetry.instrumentation.django import DjangoInstrumentor
+from opentelemetry.instrumentation.psycopg import PsycopgInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanProcessor
 
 
 def configure(processor: SpanProcessor | None = None) -> bool:
-    """Install a tracer provider and Django instrumentation. Returns whether tracing is on."""
+    """Install a tracer provider plus Django (request) and psycopg (database) instrumentation.
+    Returns whether tracing is on.
+
+    Database spans carry the SQL with its placeholders, never the bound parameters
+    (`capture_parameters` stays off), so question and document text stay out of traces."""
     if processor is None:
         if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
             return False
@@ -26,4 +31,5 @@ def configure(processor: SpanProcessor | None = None) -> bool:
     provider.add_span_processor(processor)
     trace.set_tracer_provider(provider)
     DjangoInstrumentor().instrument()
+    PsycopgInstrumentor().instrument(capture_parameters=False, enable_commenter=False)
     return True

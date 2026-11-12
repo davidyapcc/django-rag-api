@@ -16,7 +16,8 @@ Built with Django, Django REST Framework, PostgreSQL + [pgvector](https://github
 - **Ingestion:** upload `.txt`, `.md` or `.pdf`, then the API extracts text, splits it into overlapping chunks, embeds them and stores the vectors in Postgres (HNSW index, cosine distance) alongside a generated full-text column (GIN index). Duplicate uploads are detected by SHA-256.
 - **Ask:** **hybrid retrieval** for that user only: a chunk is a candidate if it is near the question's embedding **or** contains most of the question's terms (so exact names, codes and ids that embeddings miss still match), and reciprocal rank fusion orders the candidates. The LLM then answers using **structured output** (`answer` + `cited_chunk_ids`). Citations are checked against the retrieved set, so a hallucinated id never reaches the client.
 - **Cost and usage logging:** every query records input/output/embedding tokens, USD cost and latency. `GET /queries/usage/` totals them.
-- **Tracing (optional):** OpenTelemetry spans for each pipeline stage (extract, chunk, embed, store; embed, retrieve, answer) under the request span, with tokens, cost and distances. Spans never carry question, answer or document text, or titles. Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+- **Tracing (optional):** OpenTelemetry spans for each request, each pipeline stage (extract, chunk, embed, store; embed, retrieve, answer), every database query, and every OpenAI call (named and attributed per the GenAI semantic conventions: model, tokens, finish reason). Spans carry tokens, cost and distances, SQL with placeholders only, and never question, answer or document text, or titles. Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+- **Error tracking (optional):** Sentry captures unhandled errors and logged exceptions with stack traces, tagged with the OpenTelemetry trace id so an error links to its trace. Events are scrubbed to the same rule as spans: exception messages, log arguments, request bodies, query strings and local variables never leave the service. Off unless `SENTRY_DSN` is set.
 - **Guardrails:** relevance cut-offs on both retrieval gates mean the model is never called when nothing relevant is retrieved. Retrieved text is fenced and treated as data, not instructions (prompt-injection hygiene). There are per-user rate limits on `/ask` and uploads, and an upload size cap.
 - **Web demo:** a server-rendered UI (Django templates + HTMX) with one-click **Guest** accounts that expire after 24 hours, **Sample documents** with suggested questions, and answers that expand to show the cited chunks and what the question cost.
 - **Demo budget and Allowance:** a global cap on LLM spend per UTC day (`DEMO_DAILY_BUDGET_USD`, default USD 0.50), and each Owner's daily share of it (`ALLOWANCE_DAILY_USD`, default USD 0.10; `GUEST_ALLOWANCE_DAILY_USD`, USD 0.05 for Guests), so one person can't use up the demo for everyone. Once either is reached, new questions and uploads are declined until the next UTC day, through both the UI and the API.
@@ -48,6 +49,7 @@ flowchart LR
 | Provider interface + OpenAI and Fake implementations | `rag/providers.py` |
 | Chunking, extraction, pricing, pipeline spans | `rag/` |
 | Tracing setup (off unless an OTLP endpoint is set) | `apps/core/tracing.py` |
+| Error tracking setup and scrubbing (off unless `SENTRY_DSN` is set) | `apps/core/errors.py` |
 | Golden-question eval | `evals/` |
 
 ## Web UI
@@ -143,6 +145,7 @@ CI runs it with the offline provider, so a change to chunking, retrieval or the 
 3. On [Render](https://render.com): **New > Blueprint**, select this repo. `render.yaml` defines a free Docker web service. Fill in `DATABASE_URL` and `OPENAI_API_KEY` when prompted. The Demo budget defaults to USD 0.50 a day and each Owner's Allowance to USD 0.10 (USD 0.05 for Guests); change `DEMO_DAILY_BUDGET_USD`, `ALLOWANCE_DAILY_USD` and `GUEST_ALLOWANCE_DAILY_USD` to adjust them.
 4. Migrations run on container start. Health check: `/api/v1/health/`.
 5. Optional tracing: set `OTEL_EXPORTER_OTLP_ENDPOINT` (and `OTEL_EXPORTER_OTLP_HEADERS` for the backend's API key) to any OTLP/HTTP backend, such as Grafana Cloud or Honeycomb. `OTEL_SERVICE_NAME` defaults to `django-rag-api`. With no endpoint, tracing does nothing.
+6. Optional error tracking: create a free [Sentry](https://sentry.io) project (platform Django) and set its DSN as `SENTRY_DSN`. Each deploy is tagged as a release from `RENDER_GIT_COMMIT`; `SENTRY_ENVIRONMENT` defaults to `production`. With no DSN, Sentry does nothing.
 
 The free Render instance sleeps after 15 idle minutes, so the first request after a pause takes about a minute.
 
@@ -157,6 +160,7 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 - **Spend tracked per day, in ledgers.** The Demo budget reads a `DailySpend` ledger and each Owner's Allowance an `OwnerDailySpend` ledger, rather than summing Queries and Documents, so deleting a Guest or a Document never hands budget back.
 - **Allowance per day, not per month.** It shares the Demo budget's window: a monthly per-user cap wouldn't stop one Owner using up today's shared budget, and Guests only live 24 hours. Registering again gets a fresh Allowance, so the Demo budget stays the real backstop; the Allowance is about fairness.
 - **Server-rendered UI over a separate SPA.** One deploy, no build step, and the UI reuses the service layer directly instead of re-implementing rules in JavaScript. HTMX and Pico.css are vendored as static files, so the page has no third-party runtime dependency.
+- **Content-free telemetry.** Traces and error events go to third-party backends, outside the tenant boundary, so both carry ids, counts, tokens, cost and stack traces but never document or question text. That costs some debugging context (an exception's message is dropped, since provider and extraction errors can quote the input); the OpenTelemetry trace id on every Sentry event, and the Query log, recover most of it. Sentry's own performance tracing stays off so OpenTelemetry is the single source of traces.
 - **No streaming.** Citations are checked once the whole answer exists, so streaming would show claims before they're verified. Answers are a few sentences, so there's little to gain. See [`.out-of-scope/streaming-answers.md`](.out-of-scope/streaming-answers.md).
 - **Cost logged per request, prices in config.** Prices change, so they're environment variables rather than code.
 

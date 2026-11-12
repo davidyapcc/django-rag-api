@@ -103,3 +103,15 @@ def test_errors_are_recorded_by_type_only(spans, user, monkeypatch):
     assert embed.status.status_code == StatusCode.ERROR
     assert embed.attributes["error.type"] == "ProviderError"
     assert "coarse" not in _all_span_text(spans)
+
+
+def test_database_calls_are_spans_without_parameters(spans, auth_api, uploaded):
+    spans.clear()
+    resp = auth_api.post("/api/v1/ask/", {"question": QUESTION}, format="json")
+    assert resp.status_code == 201
+    db = [s for s in spans.get_finished_spans() if (s.attributes or {}).get("db.system") == "postgresql"]
+    retrieve = _by_name(spans)["ask.retrieve"]
+    assert any(s.parent.span_id == retrieve.context.span_id for s in db)
+    for s in db:
+        assert "db.statement.parameters" not in s.attributes
+        assert "%s" in s.attributes["db.statement"] or "%(" in s.attributes["db.statement"]

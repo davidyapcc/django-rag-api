@@ -29,3 +29,5 @@ services:
         value: "0.10"
       - key: GUEST_ALLOWANCE_DAILY_USD
         value: "0.05"
+      - key: SENTRY_DSN
+        sync: false # optional: Sentry project DSN; leave empty to keep error tracking off
