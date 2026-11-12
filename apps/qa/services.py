@@ -11,6 +11,7 @@ from apps.core import budget
 from apps.documents.models import Chunk
 from rag.pricing import chat_cost, embedding_cost
 from rag.providers import get_provider
+from rag.tracing import set_attributes, stage
 from rag.types import AnswerResult, ContextChunk, Usage
 
 from .models import Query
@@ -41,17 +42,46 @@ def retrieve(
 
 
 def ask(owner, question: str, document_ids: list[int] | None = None, top_k: int | None = None) -> Query:
+    with stage("ask", owner__id=owner.pk) as span:
+        query = _ask(owner, question, document_ids, top_k)
+        set_attributes(
+            span,
+            query__id=query.pk,
+            query__abstained=not query.retrieved_chunk_ids,
+            query__cited_count=query.cited_chunks.count(),
+            cost_usd=float(query.cost_usd),
+            latency_ms=query.latency_ms,
+        )
+        return query
+
+
+def _ask(owner, question: str, document_ids: list[int] | None, top_k: int | None) -> Query:
     budget.ensure_available(owner)
     started = time.monotonic()
     provider = get_provider()
     top_k = top_k or settings.RAG_TOP_K
 
-    embedded = provider.embed([question])
-    hits = retrieve(owner, embedded.vectors[0], top_k, provider.max_distance, document_ids)
+    with stage("ask.embed", llm__provider=provider.name) as span:
+        embedded = provider.embed([question])
+        set_attributes(span, llm__embedding_tokens=embedded.usage.input_tokens)
+    with stage("ask.retrieve", top_k=top_k, max_distance=provider.max_distance) as span:
+        hits = retrieve(owner, embedded.vectors[0], top_k, provider.max_distance, document_ids)
+        set_attributes(
+            span,
+            retrieved_count=len(hits),
+            min_distance=min((h.distance for h in hits), default=None),
+        )
 
     if hits:
         context = [ContextChunk(h.chunk.pk, h.chunk.document.title, h.chunk.text) for h in hits]
-        result = provider.answer(question, context)
+        with stage("ask.answer", llm__provider=provider.name, chunk_count=len(context)) as span:
+            result = provider.answer(question, context)
+            set_attributes(
+                span,
+                llm__model=result.model,
+                llm__input_tokens=result.usage.input_tokens,
+                llm__output_tokens=result.usage.output_tokens,
+            )
     else:
         # Nothing relevant: skip the chat call entirely (saves cost, avoids guessing).
         result = AnswerResult(NO_ANSWER, [], model="none", usage=Usage())
