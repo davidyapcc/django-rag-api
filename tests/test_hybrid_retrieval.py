@@ -63,6 +63,15 @@ def test_text_gate_never_crosses_owners(user, other_user):
     assert retrieve(user, q, _vector(user, q), top_k=5, max_distance=FAR_AWAY) == []
 
 
+def test_loading_fused_chunks_is_scoped_by_owner(user, other_user, monkeypatch):
+    # Defence in depth: even if a gate returned another Owner's Chunk id, retrieve drops it.
+    foreign = ingest(other_user, Upload("net.txt", "text/plain", NETWORK))
+    foreign_chunk = Chunk.objects.get(document=foreign)
+    monkeypatch.setattr(services, "_vector_gate", lambda *a: [(foreign_chunk.pk, 0.1)])
+    q = "Should I use WPA3?"
+    assert retrieve(user, q, [0.0], top_k=5, max_distance=1.0) == []
+
+
 def test_document_filter_applies_to_the_text_gate(user):
     net = ingest(user, Upload("net.txt", "text/plain", NETWORK))
     coffee = ingest(user, Upload("coffee.txt", "text/plain", COFFEE))

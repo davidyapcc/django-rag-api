@@ -102,9 +102,13 @@ def retrieve(
         for rank, (pk, _) in enumerate(ranked, start=1):
             scores[pk] = scores.get(pk, 0.0) + 1.0 / (RRF_K + rank)
     best = sorted(scores, key=lambda pk: (-scores[pk], pk))[:top_k]
-    chunks = Chunk.objects.select_related("document").in_bulk(best)
+    chunks = Chunk.objects.filter(owner=owner).select_related("document").in_bulk(best)
     distances, coverages = dict(vector), dict(text)
-    return [RetrievedChunk(chunks[pk], scores[pk], distances.get(pk), coverages.get(pk)) for pk in best]
+    return [
+        RetrievedChunk(chunks[pk], scores[pk], distances.get(pk), coverages.get(pk))
+        for pk in best
+        if pk in chunks
+    ]
 
 
 def ask(owner, question: str, document_ids: list[int] | None = None, top_k: int | None = None) -> Query:
