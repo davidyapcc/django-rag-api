@@ -141,7 +141,7 @@ CI runs it with the offline provider, so a change to chunking, retrieval or the 
 3. On [Render](https://render.com): **New > Blueprint**, select this repo. `render.yaml` defines a free Docker web service. Fill in `DATABASE_URL` and `OPENAI_API_KEY` when prompted. The Demo budget defaults to USD 0.50 a day; change `DEMO_DAILY_BUDGET_USD` to adjust it.
 4. Migrations run on container start. Health check: `/api/v1/health/`.
 
-The free Render instance sleeps after 15 idle minutes, so the first request after a pause takes about 30 seconds.
+The free Render instance sleeps after 15 idle minutes, so the first request after a pause takes about a minute.
 
 ## Design decisions and trade-offs
 
@@ -152,16 +152,20 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 - **Structured output plus server-side citation validation.** JSON-schema output removes brittle parsing, and filtering cited ids against what was actually retrieved means the API never returns a citation it can't back up.
 - **Spend tracked per day, apart from users.** The Demo budget reads a `DailySpend` ledger rather than summing users' queries, so deleting a Guest never hands budget back.
 - **Server-rendered UI over a separate SPA.** One deploy, no build step, and the UI reuses the service layer directly instead of re-implementing rules in JavaScript. HTMX and Pico.css are vendored as static files, so the page has no third-party runtime dependency.
+- **No streaming.** Citations are checked once the whole answer exists, so streaming would show claims before they're verified. Answers are a few sentences, so there's little to gain. See [`.out-of-scope/streaming-answers.md`](.out-of-scope/streaming-answers.md).
 - **Cost logged per request, prices in config.** Prices change, so they're environment variables rather than code.
 
 ## Roadmap
 
-- Async ingestion with a job status and retries
-- Hybrid search (Postgres full-text + vector, reciprocal rank fusion)
-- Streaming answers (SSE)
-- Multi-turn conversations (follow-up questions that use earlier Queries)
-- Per-user monthly cost budget enforced at `/ask`
-- OpenTelemetry traces for each pipeline stage
+In build order; each issue carries the agent brief.
+
+1. Per-Owner daily Allowance ([#6](https://github.com/davidyapcc/django-rag-api/issues/6))
+2. OpenTelemetry traces for each pipeline stage, with no document or question text in spans ([#7](https://github.com/davidyapcc/django-rag-api/issues/7))
+3. Hybrid search: Postgres full-text + vector, reciprocal rank fusion ([#8](https://github.com/davidyapcc/django-rag-api/issues/8))
+4. Follow-up questions that rewrite into a standalone question ([#9](https://github.com/davidyapcc/django-rag-api/issues/9))
+5. Async ingestion through a push queue (QStash), so no worker is needed on the free host ([#11](https://github.com/davidyapcc/django-rag-api/issues/11)); can be built any time after #6
+
+Considered and declined (reasons and what would reopen them are in [`.out-of-scope/`](.out-of-scope/)): streaming answers.
 
 ## License
 
