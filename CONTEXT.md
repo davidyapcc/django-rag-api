@@ -11,7 +11,7 @@ The user a Document, Chunk or Query belongs to. Nothing is ever visible across o
 _Avoid_: Account, tenant, customer
 
 **Document**:
-One uploaded file, after its text has been extracted, chunked and embedded.
+One uploaded file and its ingestion state: pending, then ready or failed. Only a ready Document has Chunks.
 _Avoid_: File, upload, source
 
 **Chunk**:

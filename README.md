@@ -163,8 +163,9 @@ In build order; each issue carries the agent brief.
 2. OpenTelemetry traces for each pipeline stage, with no document or question text in spans ([#7](https://github.com/davidyapcc/django-rag-api/issues/7))
 3. Hybrid search: Postgres full-text + vector, reciprocal rank fusion ([#8](https://github.com/davidyapcc/django-rag-api/issues/8))
 4. Follow-up questions that rewrite into a standalone question ([#9](https://github.com/davidyapcc/django-rag-api/issues/9))
+5. Async ingestion through a push queue (QStash), so no worker is needed on the free host ([#11](https://github.com/davidyapcc/django-rag-api/issues/11)); can be built any time after #6
 
-Considered and declined (reasons and what would reopen them are in [`.out-of-scope/`](.out-of-scope/)): async ingestion and streaming answers.
+Considered and declined (reasons and what would reopen them are in [`.out-of-scope/`](.out-of-scope/)): streaming answers.
 
 ## License
 
