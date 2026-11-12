@@ -10,8 +10,8 @@ from django.utils import timezone
 from apps.accounts.models import Guest
 from apps.accounts.services import create_guest, is_guest, purge_expired_guests
 from apps.core import budget
-from apps.core.budget import BudgetExceededError
-from apps.core.models import DailySpend
+from apps.core.budget import AllowanceExceededError, BudgetExceededError
+from apps.core.models import DailySpend, OwnerDailySpend
 from apps.documents.models import Chunk, Document
 from apps.documents.samples import load_samples
 from apps.documents.services import Upload, UploadLimitError, ingest
@@ -101,13 +101,13 @@ def paid_provider(monkeypatch, settings):
 def test_budget_not_enforced_for_free_provider(settings, user):
     settings.DEMO_DAILY_BUDGET_USD = 0.01
     DailySpend.objects.create(day=timezone.now().date(), cost_usd=Decimal("5"))
-    budget.ensure_available()  # fake provider costs nothing: no cap
+    budget.ensure_available(user)  # fake provider costs nothing: no cap
 
 
-def test_budget_disabled_when_zero(settings, paid_provider):
+def test_budget_disabled_when_zero(settings, paid_provider, user):
     settings.DEMO_DAILY_BUDGET_USD = 0
     DailySpend.objects.create(day=timezone.now().date(), cost_usd=Decimal("5"))
-    budget.ensure_available()
+    budget.ensure_available(user)
 
 
 def test_budget_blocks_ask_and_upload_once_spent(paid_provider, user):
@@ -145,3 +145,92 @@ def test_api_returns_429_when_budget_spent(paid_provider, auth_api):
         "/api/v1/documents/", {"file": SimpleUploadedFile("a.txt", b"hello")}, format="multipart"
     )
     assert resp.status_code == 429
+
+
+# --- Allowance: each Owner's share of the Demo budget per UTC day ---
+
+
+@pytest.fixture
+def allowance(monkeypatch, settings):
+    """A paid-looking provider, a roomy Demo budget, and small Allowances."""
+    monkeypatch.setattr(providers.FakeProvider, "name", "paid-fake")
+    settings.DEMO_DAILY_BUDGET_USD = 10
+    settings.ALLOWANCE_DAILY_USD = 0.05
+    settings.GUEST_ALLOWANCE_DAILY_USD = 0.02
+
+
+def _spend(owner, usd: str, day=None) -> None:
+    OwnerDailySpend.objects.create(owner=owner, day=day or timezone.now().date(), cost_usd=Decimal(usd))
+
+
+def test_allowance_blocks_ask_and_upload_for_that_owner_only(allowance, user, other_user):
+    _spend(user, "0.05")
+    with pytest.raises(AllowanceExceededError):
+        ask(user, "anything?")
+    with pytest.raises(AllowanceExceededError):
+        ingest(user, Upload("a.txt", "text/plain", b"hello"))
+    # Another Owner still has their own Allowance and the Demo budget has room.
+    assert ingest(other_user, Upload("a.txt", "text/plain", b"hello")).pk
+    assert ask(other_user, "hello?").pk
+
+
+def test_guests_get_the_smaller_allowance(allowance, user):
+    guest = create_guest()
+    _spend(guest, "0.03")
+    _spend(user, "0.03")
+    with pytest.raises(AllowanceExceededError):
+        budget.ensure_available(guest)
+    budget.ensure_available(user)
+
+
+def test_allowance_disabled_when_zero_but_demo_budget_still_applies(allowance, settings, user):
+    settings.ALLOWANCE_DAILY_USD = 0
+    _spend(user, "5")
+    budget.ensure_available(user)
+    DailySpend.objects.create(day=timezone.now().date(), cost_usd=Decimal("10"))
+    with pytest.raises(BudgetExceededError) as exc:
+        budget.ensure_available(user)
+    assert not isinstance(exc.value, AllowanceExceededError)
+
+
+def test_allowance_resets_each_utc_day(allowance, user):
+    _spend(user, "5", day=timezone.now().date() - timedelta(days=1))
+    budget.ensure_available(user)
+
+
+def test_allowance_not_enforced_for_free_provider(settings, user):
+    settings.ALLOWANCE_DAILY_USD = 0.01
+    _spend(user, "5")
+    budget.ensure_available(user)
+
+
+def test_spend_is_recorded_per_owner(settings, user, other_user):
+    settings.CHAT_INPUT_PRICE_PER_MTOK = 1_000_000.0
+    settings.EMBEDDING_PRICE_PER_MTOK = 1_000_000.0
+    ingest(user, Upload("c.txt", "text/plain", b"French press needs a coarse grind."))
+    after_ingest = budget.spent_today_by(user)
+    assert after_ingest > 0
+    ask(user, "What grind does a French press need?")
+    assert budget.spent_today_by(user) > after_ingest
+    assert budget.spent_today_by(other_user) == 0
+    assert budget.spent_today() == budget.spent_today_by(user)
+
+
+def test_deleting_a_document_does_not_hand_allowance_back(settings, user):
+    settings.EMBEDDING_PRICE_PER_MTOK = 1_000_000.0
+    doc = ingest(user, Upload("c.txt", "text/plain", b"some words here"))
+    spent = budget.spent_today_by(user)
+    doc.delete()
+    assert budget.spent_today_by(user) == spent
+
+
+def test_api_returns_429_when_allowance_used(allowance, user, auth_api):
+    _spend(user, "1")
+    resp = auth_api.post("/api/v1/ask/", {"question": "x"}, format="json")
+    assert resp.status_code == 429
+    assert "allowance" in resp.json()["detail"]
+    resp = auth_api.post(
+        "/api/v1/documents/", {"file": SimpleUploadedFile("a.txt", b"hello")}, format="multipart"
+    )
+    assert resp.status_code == 429
+    assert "allowance" in resp.json()["detail"]

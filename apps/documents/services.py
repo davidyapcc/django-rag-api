@@ -69,7 +69,7 @@ def ingest(owner, upload: Upload) -> Document:
     if not pieces:
         raise IngestionError("document contains no extractable text")
 
-    budget.ensure_available()
+    budget.ensure_available(owner)
     provider = get_provider()
     vectors: list[list[float]] = []
     tokens = 0
@@ -82,7 +82,7 @@ def ingest(owner, upload: Upload) -> Document:
         logger.exception("embedding failed for %s", upload.title)
         raise
     finally:
-        budget.record(embedding_cost(Usage(input_tokens=tokens)))
+        budget.record(owner, embedding_cost(Usage(input_tokens=tokens)))
 
     with transaction.atomic():
         doc = Document.objects.create(

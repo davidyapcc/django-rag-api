@@ -1,12 +1,13 @@
 from decimal import Decimal
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 from django.utils import timezone
 
 from apps.accounts.models import Guest
-from apps.core.models import DailySpend
+from apps.core.models import DailySpend, OwnerDailySpend
 from apps.documents.models import Document
 from apps.qa.models import Query
 from rag import providers
@@ -145,6 +146,17 @@ def test_budget_message(guest_client, settings, monkeypatch):
     DailySpend.objects.create(day=timezone.now().date(), cost_usd=Decimal("1"))
     assert b"daily budget" in guest_client.post("/app/ask/", {"question": "q"}).content
     assert b"daily budget" in guest_client.post("/app/documents/samples/").content
+
+
+def test_allowance_message(guest_client, settings, monkeypatch):
+    settings.DEMO_DAILY_BUDGET_USD = 10
+    settings.GUEST_ALLOWANCE_DAILY_USD = 0.01
+    monkeypatch.setattr(providers.FakeProvider, "name", "paid-fake")
+    guest = get_user_model().objects.get(pk=guest_client.session["_auth_user_id"])
+    OwnerDailySpend.objects.create(owner=guest, day=timezone.now().date(), cost_usd=Decimal("1"))
+    assert b"daily allowance" in guest_client.post("/app/ask/", {"question": "q"}).content
+    resp = guest_client.post("/app/documents/upload/", {"file": SimpleUploadedFile("a.txt", b"One.")})
+    assert b"daily allowance" in resp.content
 
 
 def test_rate_limits(guest_client, monkeypatch):
