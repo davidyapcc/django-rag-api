@@ -180,3 +180,44 @@ def test_rate_limits(guest_client, monkeypatch):
 def test_history_counts_only_own_queries(guest_client, user):
     Query.objects.create(owner=user, question="secret", answer="a", provider="fake", model="m")
     assert b"secret" not in guest_client.get("/app/history/").content
+
+
+def test_pending_document_polls_until_ready_or_failed(guest_client, dummy_tasks):
+    from apps.documents.services import ingest_document
+
+    resp = guest_client.post(
+        "/app/documents/upload/", {"file": SimpleUploadedFile("tea.txt", b"Steep green tea.")}
+    )
+    assert b"processing" in resp.content.lower()
+    doc = Document.objects.get()
+    assert f'hx-get="/app/documents/{doc.pk}/"'.encode() in resp.content
+    assert b'hx-trigger="every 2s"' in resp.content
+
+    # Polling while pending still schedules another poll.
+    poll_pending = guest_client.get(f"/app/documents/{doc.pk}/")
+    assert poll_pending.status_code == 200
+    assert b'hx-trigger="every 2s"' in poll_pending.content
+
+    # Once ready, polling stops and chunk count is displayed.
+    ingest_document.call(doc.pk)
+    poll_ready = guest_client.get(f"/app/documents/{doc.pk}/")
+    assert poll_ready.status_code == 200
+    assert b'hx-trigger="every 2s"' not in poll_ready.content
+    assert b"1 chunk" in poll_ready.content
+
+    # Failed documents stop polling and render the error.
+    doc.status = Document.Status.FAILED
+    doc.error = "daily allowance used"
+    doc.save(update_fields=["status", "error"])
+    poll_failed = guest_client.get(f"/app/documents/{doc.pk}/")
+    assert b'hx-trigger="every 2s"' not in poll_failed.content
+    assert b"Failed: daily allowance used" in poll_failed.content
+
+
+def test_cannot_see_or_poll_another_owners_pending_document(guest_client, user, dummy_tasks):
+    from apps.documents.services import Upload, ingest
+
+    other_doc = ingest(user, Upload("secret-pending.txt", "text/plain", b"hidden"))
+    assert other_doc.status == Document.Status.PENDING
+    assert b"secret-pending.txt" not in guest_client.get("/app/").content
+    assert guest_client.get(f"/app/documents/{other_doc.pk}/").status_code == 404

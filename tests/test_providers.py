@@ -49,8 +49,27 @@ def test_unknown_provider(settings):
 
 def test_openai_requires_key(settings):
     settings.OPENAI_API_KEY = ""
-    with pytest.raises(ProviderError):
+    with pytest.raises(ProviderError) as exc:
         OpenAIProvider()
+    assert exc.value.transient is False
+
+
+def test_provider_error_transient_flag():
+    assert ProviderError("oops").transient is True
+    assert ProviderError("bad request", transient=False).transient is False
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_transient"),
+    [(400, False), (401, False), (408, True), (409, True), (429, True), (500, True), (503, True)],
+)
+def test_openai_embed_status_sets_transient(openai_provider, status_code, expected_transient):
+    response = MagicMock(status_code=status_code, headers={})
+    err = openai.APIStatusError("api error", response=response, body=None)
+    openai_provider.client.embeddings.create.side_effect = err
+    with pytest.raises(ProviderError) as exc:
+        openai_provider.embed(["x"])
+    assert exc.value.transient is expected_transient
 
 
 @pytest.fixture

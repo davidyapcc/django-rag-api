@@ -56,15 +56,34 @@ def test_unhandled_error_reaches_sentry_without_content(spans, sentry, auth_api,
     assert SECRET not in json.dumps(event)
 
 
-def test_logged_error_keeps_template_not_arguments(sentry, user, monkeypatch):
+def test_transient_callback_error_does_not_reach_sentry(
+    sentry, client, user, settings, monkeypatch, dummy_tasks
+):
     from apps.documents.services import Upload, ingest
+    from tests.test_tasks import SIGNING_KEY, _signed_post
+
+    settings.QSTASH_CURRENT_SIGNING_KEY = SIGNING_KEY
+    doc = ingest(user, Upload(f"{SECRET}.txt", "text/plain", f"All about {SECRET}.".encode()))
 
     def fail(self, texts):
-        raise providers.ProviderError(f"upstream echoed {texts[0]}")
+        raise providers.ProviderError(f"upstream echoed {texts[0]}", transient=True)
 
     monkeypatch.setattr(providers.FakeProvider, "embed", fail)
-    with pytest.raises(providers.ProviderError):
-        ingest(user, Upload(f"{SECRET}.txt", "text/plain", f"All about {SECRET}.".encode()))
+    resp = _signed_post(client, "/api/v1/tasks/ingest/", {"document_id": doc.pk})
+    assert resp.status_code == 502
+    sentry_sdk.flush()
+    assert sentry.events == []
+
+
+def test_logged_error_keeps_template_not_arguments(sentry, client, user, settings, dummy_tasks):
+    from apps.documents.services import Upload, ingest
+    from tests.test_tasks import SIGNING_KEY, _signed_post
+
+    settings.QSTASH_CURRENT_SIGNING_KEY = SIGNING_KEY
+    doc = ingest(user, Upload(f"{SECRET}.txt", "text/plain", f"All about {SECRET}.".encode()))
+
+    resp = _signed_post(client, "/api/v1/tasks/ingest/failed/", {"document_id": doc.pk})
+    assert resp.status_code == 200
     sentry_sdk.flush()
     (event,) = sentry.events
     assert event["logentry"] == {"message": "embedding failed for %s"}

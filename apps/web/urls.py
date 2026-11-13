@@ -14,6 +14,7 @@ urlpatterns = [
     path("app/", views.app, name="app"),
     path("app/documents/upload/", views.upload, name="upload"),
     path("app/documents/samples/", views.samples, name="samples"),
+    path("app/documents/<int:pk>/", views.document_row, name="document-row"),
     path("app/documents/<int:pk>/delete/", views.delete_document, name="delete-document"),
     path("app/ask/", views.ask_view, name="ask"),
     path("app/history/", views.history, name="history"),

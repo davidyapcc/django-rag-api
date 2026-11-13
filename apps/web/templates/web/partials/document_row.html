@@ -1,0 +1,14 @@
+<li id="document-{{ d.pk }}"{% if d.status == "pending" %} hx-get="{% url 'web:document-row' d.pk %}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  <span>
+    <strong>{{ d.title }}</strong>
+    {% if d.status == "pending" %}
+      <small class="muted" aria-busy="true">Processing…</small>
+    {% elif d.status == "failed" %}
+      <small class="muted">Failed{% if d.error %}: {{ d.error }}{% endif %}</small>
+    {% else %}
+      <small class="muted">{{ d.chunk_count }} chunk{{ d.chunk_count|pluralize }}</small>
+    {% endif %}
+  </span>
+  <button class="secondary outline small" hx-post="{% url 'web:delete-document' d.pk %}" hx-target="#documents-panel" hx-confirm="Delete {{ d.title }}?">Delete</button>
+</li>
+

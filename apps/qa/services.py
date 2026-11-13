@@ -10,7 +10,7 @@ from django.db import connection
 from pgvector.django import CosineDistance
 
 from apps.core import budget
-from apps.documents.models import Chunk
+from apps.documents.models import Chunk, Document
 from rag.pricing import chat_cost, embedding_cost
 from rag.providers import LLMProvider, get_provider
 from rag.tracing import set_attributes, stage
@@ -28,6 +28,10 @@ FOLLOW_UP_HISTORY_LENGTH = 3
 
 class PredecessorNotFoundError(Exception):
     """The named predecessor does not exist or belongs to another Owner (indistinguishable on purpose)."""
+
+
+class DocumentNotReadyError(Exception):
+    """At least one named Document of the Owner is not ready yet."""
 
 
 RRF_K = 60  # the usual reciprocal rank fusion constant; only orders candidates, never gates them
@@ -181,6 +185,13 @@ def _ask(
     owner, question: str, document_ids: list[int] | None, top_k: int | None, predecessor_id: int | None
 ) -> Query:
     predecessor = _predecessor(owner, predecessor_id)
+    if (
+        document_ids
+        and Document.objects.filter(owner=owner, pk__in=document_ids)
+        .exclude(status=Document.Status.READY)
+        .exists()
+    ):
+        raise DocumentNotReadyError("One or more documents are not ready yet.")
     budget.ensure_available(owner)
     started = time.monotonic()
     provider = get_provider()

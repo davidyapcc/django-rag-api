@@ -63,14 +63,26 @@ def test_bad_encoding_is_unprocessable(auth_api):
     assert resp.status_code == 422
 
 
-def test_embedding_failure_returns_502_and_stores_nothing(auth_api, coffee_file, monkeypatch):
-    def boom(self, texts):
-        raise ProviderError("down")
+def test_embedding_failure_leaves_no_partial_chunks(user, monkeypatch):
+    from apps.documents.services import Upload, ingest
 
-    monkeypatch.setattr(providers.FakeProvider, "embed", boom)
-    resp = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart")
-    assert resp.status_code == 502
-    assert not Document.objects.exists()
+    real_embed = providers.FakeProvider.embed
+    calls = 0
+
+    def fail_on_second_batch(self, texts):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ProviderError("down", transient=False)
+        return real_embed(self, texts)
+
+    monkeypatch.setattr(providers.FakeProvider, "embed", fail_on_second_batch)
+    # 70 paragraphs -> > 64 chunks so embedding spans two batches.
+    body = "\n\n".join(f"Paragraph {i}: " + ("word " * 120) for i in range(70)).encode()
+    doc = ingest(user, Upload("big.txt", "text/plain", body))
+    doc.refresh_from_db()
+    assert doc.status == Document.Status.FAILED
+    assert not Chunk.objects.filter(document=doc).exists()
 
 
 def test_list_retrieve_chunks_delete(auth_api, uploaded):
@@ -100,7 +112,7 @@ def test_upload_is_throttled(auth_api, monkeypatch):
     second = auth_api.post(
         "/api/v1/documents/", {"file": SimpleUploadedFile("b.txt", b"two")}, format="multipart"
     )
-    assert first.status_code == 201
+    assert first.status_code == 202
     assert second.status_code == 429
 
 
@@ -116,3 +128,64 @@ def test_moving_a_document_moves_its_chunks(uploaded, other_user):
     doc = Document.objects.get(pk=uploaded["id"])
     Document.objects.filter(pk=doc.pk).update(owner=other_user)
     assert set(Chunk.objects.filter(document=doc).values_list("owner", flat=True)) == {other_user.pk}
+
+
+def test_pending_document_lifecycle_and_isolation(auth_api, other_user, coffee_file, dummy_tasks):
+    resp = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart")
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["status"] == "pending"
+    assert data["chunk_count"] == 0
+    assert "text" not in data
+
+    doc = Document.objects.get(pk=data["id"])
+    assert "French press" in doc.text
+    assert not Chunk.objects.filter(document=doc).exists()
+
+    other_client = APIClient()
+    other_client.force_authenticate(other_user)
+    assert other_client.get("/api/v1/documents/").json()["count"] == 0
+    assert other_client.get(f"/api/v1/documents/{doc.pk}/").status_code == 404
+
+
+def test_ingest_document_is_idempotent(user, dummy_tasks):
+    from apps.documents.services import Upload, ingest, ingest_document
+
+    doc = ingest(user, Upload("coffee.md", "text/markdown", COFFEE))
+    assert doc.status == Document.Status.PENDING
+
+    ingest_document.call(doc.pk)
+    doc.refresh_from_db()
+    assert doc.status == Document.Status.READY
+    first_count = doc.chunk_count
+    assert first_count >= 1
+    assert Chunk.objects.filter(document=doc).count() == first_count
+
+    ingest_document.call(doc.pk)
+    assert Chunk.objects.filter(document=doc).count() == first_count
+
+
+def test_failed_publish_marks_document_failed_and_allows_reupload(
+    auth_api, coffee_file, settings, monkeypatch
+):
+    from apps.documents import qstash
+
+    settings.TASKS = {"default": {"BACKEND": "apps.documents.qstash.QStashBackend"}}
+    settings.QSTASH_TOKEN = "tok-test"
+
+    def broken_post(url: str, headers: dict[str, str], body: bytes) -> dict:
+        raise OSError("qstash down")
+
+    monkeypatch.setattr(qstash, "_post", broken_post)
+    resp = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart")
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "ingestion queue unavailable"
+    doc = Document.objects.get()
+    assert doc.status == Document.Status.FAILED
+
+    # Subsequent upload with working backend succeeds rather than returning 409 duplicate.
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.immediate.ImmediateBackend"}}
+    coffee_file.seek(0)
+    retry_resp = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart")
+    assert retry_resp.status_code == 202
+    assert retry_resp.json()["status"] == "ready"

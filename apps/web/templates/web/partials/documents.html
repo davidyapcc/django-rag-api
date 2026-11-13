@@ -5,10 +5,7 @@
   {% if documents %}
     <ul class="doc-list">
       {% for d in documents %}
-        <li>
-          <span><strong>{{ d.title }}</strong> <small class="muted">{{ d.chunk_count }} chunk{{ d.chunk_count|pluralize }}</small></span>
-          <button class="secondary outline small" hx-post="{% url 'web:delete-document' d.pk %}" hx-target="#documents-panel" hx-confirm="Delete {{ d.title }}?">Delete</button>
-        </li>
+        {% include "web/partials/document_row.html" %}
       {% endfor %}
     </ul>
   {% else %}

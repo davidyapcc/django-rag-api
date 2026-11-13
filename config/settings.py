@@ -31,6 +31,12 @@ env = environ.Env(
     GUEST_ALLOWANCE_DAILY_USD=(float, 0.05),
     GUEST_MAX_DOCUMENTS=(int, 5),
     GUEST_MAX_UPLOAD_BYTES=(int, 500 * 1024),
+    TASK_BACKEND=(str, "immediate"),
+    QSTASH_URL=(str, "https://qstash.upstash.io"),
+    QSTASH_TOKEN=(str, ""),
+    QSTASH_CURRENT_SIGNING_KEY=(str, ""),
+    QSTASH_NEXT_SIGNING_KEY=(str, ""),
+    QSTASH_CALLBACK_BASE_URL=(str, ""),
 )
 environ.Env.read_env(BASE_DIR / ".env")
 
@@ -162,6 +168,20 @@ ALLOWANCE_DAILY_USD = env("ALLOWANCE_DAILY_USD")
 GUEST_ALLOWANCE_DAILY_USD = env("GUEST_ALLOWANCE_DAILY_USD")
 GUEST_MAX_DOCUMENTS = env("GUEST_MAX_DOCUMENTS")
 GUEST_MAX_UPLOAD_BYTES = env("GUEST_MAX_UPLOAD_BYTES")
+
+_TASK_BACKENDS = {
+    "immediate": "django.tasks.backends.immediate.ImmediateBackend",
+    "qstash": "apps.documents.qstash.QStashBackend",
+}
+TASK_BACKEND = env("TASK_BACKEND")
+TASKS = {"default": {"BACKEND": _TASK_BACKENDS[TASK_BACKEND]}}
+QSTASH_URL = env("QSTASH_URL")
+QSTASH_TOKEN = env("QSTASH_TOKEN")
+QSTASH_CURRENT_SIGNING_KEY = env("QSTASH_CURRENT_SIGNING_KEY")
+QSTASH_NEXT_SIGNING_KEY = env("QSTASH_NEXT_SIGNING_KEY")
+QSTASH_CALLBACK_BASE_URL = env("QSTASH_CALLBACK_BASE_URL") or (
+    f"https://{render_host}" if render_host else "http://localhost:8000"
+)
 
 LOGIN_URL = "web:login"
 LOGIN_REDIRECT_URL = "web:app"

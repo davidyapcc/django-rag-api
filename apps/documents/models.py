@@ -7,6 +7,7 @@ from pgvector.django import HnswIndex, VectorField
 
 class Document(models.Model):
     class Status(models.TextChoices):
+        PENDING = "pending"
         READY = "ready"
         FAILED = "failed"
 
@@ -15,6 +16,7 @@ class Document(models.Model):
     content_type = models.CharField(max_length=100)
     size_bytes = models.PositiveIntegerField()
     sha256 = models.CharField(max_length=64)
+    text = models.TextField(blank=True)
     status = models.CharField(max_length=16, choices=Status.choices)
     error = models.TextField(blank=True)
     chunk_count = models.PositiveIntegerField(default=0)

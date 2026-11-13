@@ -17,6 +17,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             "content_type",
             "size_bytes",
             "status",
+            "error",
             "chunk_count",
             "embedding_tokens",
             "created_at",
