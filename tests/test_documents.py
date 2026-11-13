@@ -179,6 +179,7 @@ def test_failed_publish_marks_document_failed_and_allows_reupload(
     monkeypatch.setattr(qstash, "_post", broken_post)
     resp = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart")
     assert resp.status_code == 502
+    assert resp.json()["detail"] == "ingestion queue unavailable"
     doc = Document.objects.get()
     assert doc.status == Document.Status.FAILED
 

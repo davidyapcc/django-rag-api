@@ -182,14 +182,17 @@ def ingest_document(document_id: int) -> None:
 
 
 def fail_document(document_id: int, error: str = "embedding provider unavailable") -> None:
-    doc = Document.objects.filter(pk=document_id).first()
+    # One conditional UPDATE, so a final attempt that commits `ready` while this callback runs
+    # (QStash gave up on a request that still finished) is never overwritten with `failed`.
+    flipped = Document.objects.filter(pk=document_id, status=Document.Status.PENDING).update(
+        status=Document.Status.FAILED, error=error
+    )
+    doc = Document.objects.filter(pk=document_id).only("pk", "title", "status").first()
     if doc is None:
         return
-    if doc.status == Document.Status.PENDING:
-        _mark_failed(doc, error)
+    set_attributes(trace.get_current_span(), document__id=doc.pk, document__status=doc.status)
+    if flipped:
         logger.error("embedding failed for %s", doc.title)
-    else:
-        set_attributes(trace.get_current_span(), document__id=doc.pk, document__status=doc.status)
 
 
 def max_upload_bytes() -> int:

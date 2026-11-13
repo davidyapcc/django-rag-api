@@ -280,3 +280,24 @@ def test_callbacks_excluded_from_openapi_schema(client):
     resp = client.get("/api/schema/")
     assert resp.status_code == 200
     assert b"/api/v1/tasks/ingest/" not in resp.content
+
+
+def test_fail_document_only_flips_and_reports_a_pending_document(pending_doc, caplog):
+    from apps.documents.services import fail_document
+
+    # A final attempt committed `ready` before the failure callback ran: it must stay ready, unreported.
+    Document.objects.filter(pk=pending_doc.pk).update(status=Document.Status.READY)
+    with caplog.at_level("ERROR", logger="apps.documents.services"):
+        fail_document(pending_doc.pk)
+    pending_doc.refresh_from_db()
+    assert pending_doc.status == Document.Status.READY
+    assert not caplog.records
+
+    Document.objects.filter(pk=pending_doc.pk).update(status=Document.Status.PENDING)
+    with caplog.at_level("ERROR", logger="apps.documents.services"):
+        fail_document(pending_doc.pk)
+        fail_document(pending_doc.pk)  # a duplicate delivery reports nothing new
+    pending_doc.refresh_from_db()
+    assert pending_doc.status == Document.Status.FAILED
+    assert len(caplog.records) == 1
+    fail_document(10**9)  # unknown id: no-op

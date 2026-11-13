@@ -69,8 +69,10 @@ class DocumentViewSet(
             return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
         except IngestionError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
-        except ProviderError:
-            return Response({"detail": "embedding provider unavailable"}, status=status.HTTP_502_BAD_GATEWAY)
+        except ProviderError as exc:
+            # ingest() raises only fixed messages here ("ingestion queue unavailable",
+            # "embedding provider unavailable"), so the cause is safe to show.
+            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(DocumentSerializer(doc).data, status=status.HTTP_202_ACCEPTED)
 
     @extend_schema(responses={200: ChunkSerializer(many=True)})
