@@ -66,7 +66,7 @@ def test_upload_spans_each_stage(spans, auth_api):
     resp = auth_api.post(
         "/api/v1/documents/", {"file": SimpleUploadedFile("coffee.md", COFFEE)}, format="multipart"
     )
-    assert resp.status_code == 201
+    assert resp.status_code == 202
     by_name = _by_name(spans)
     root = by_name["ingest"]
     for stage in ("ingest.extract", "ingest.chunk", "ingest.embed", "ingest.store"):
@@ -92,13 +92,19 @@ def test_abstained_ask_has_no_answer_span(spans, user):
     assert by_name["ask"].attributes["query.abstained"] is True
 
 
-def test_errors_are_recorded_by_type_only(spans, user, monkeypatch):
+def test_errors_are_recorded_by_type_only(spans, user, monkeypatch, settings):
+    from apps.documents.services import ingest_document
+
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
+    doc = ingest(user, Upload("c.txt", "text/plain", b"French press needs a coarse grind."))
+    spans.clear()
+
     def fail(self, texts):
         raise ProviderError("upstream echoed: French press needs a coarse grind")
 
     monkeypatch.setattr(providers.FakeProvider, "embed", fail)
     with pytest.raises(ProviderError):
-        ingest(user, Upload("c.txt", "text/plain", b"French press needs a coarse grind."))
+        ingest_document.call(doc.pk)
     embed = _by_name(spans)["ingest.embed"]
     assert embed.status.status_code == StatusCode.ERROR
     assert embed.attributes["error.type"] == "ProviderError"

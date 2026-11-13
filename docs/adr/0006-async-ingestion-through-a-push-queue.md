@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Ingestion runs through a push queue

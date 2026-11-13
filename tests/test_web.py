@@ -125,14 +125,13 @@ def test_empty_question(guest_client):
 
 
 def test_provider_errors_are_friendly(guest_client, monkeypatch):
-    def boom(self, *a):
-        raise ProviderError("down")
+    def boom(self, *a, **kw):
+        raise ProviderError("down", transient=False)
 
     monkeypatch.setattr(providers.FakeProvider, "embed", boom)
     assert b"unavailable" in guest_client.post("/app/ask/", {"question": "q"}).content
     resp = guest_client.post("/app/documents/upload/", {"file": SimpleUploadedFile("t.txt", b"Hi.")})
-    assert b"unavailable" in resp.content
-    assert b"unavailable" in guest_client.post("/app/documents/samples/").content
+    assert b"Failed" in resp.content
 
 
 def test_samples_twice(guest_client):
@@ -180,3 +179,40 @@ def test_rate_limits(guest_client, monkeypatch):
 def test_history_counts_only_own_queries(guest_client, user):
     Query.objects.create(owner=user, question="secret", answer="a", provider="fake", model="m")
     assert b"secret" not in guest_client.get("/app/history/").content
+
+
+def test_pending_document_polls_until_ready_or_failed(guest_client, user, settings):
+    from apps.documents.services import Upload, ingest, ingest_document
+
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
+    resp = guest_client.post(
+        "/app/documents/upload/", {"file": SimpleUploadedFile("tea.txt", b"Steep green tea.")}
+    )
+    assert b"processing" in resp.content.lower()
+    doc = Document.objects.get()
+    assert f'hx-get="/app/documents/{doc.pk}/"'.encode() in resp.content
+    assert b'hx-trigger="every 2s"' in resp.content
+
+    # Polling while pending still schedules another poll.
+    poll_pending = guest_client.get(f"/app/documents/{doc.pk}/")
+    assert poll_pending.status_code == 200
+    assert b'hx-trigger="every 2s"' in poll_pending.content
+
+    # Once ready, polling stops and chunk count is displayed.
+    ingest_document.call(doc.pk)
+    poll_ready = guest_client.get(f"/app/documents/{doc.pk}/")
+    assert poll_ready.status_code == 200
+    assert b'hx-trigger="every 2s"' not in poll_ready.content
+    assert b"1 chunk" in poll_ready.content
+
+    # Failed documents stop polling and render the error.
+    doc.status = Document.Status.FAILED
+    doc.error = "daily allowance used"
+    doc.save(update_fields=["status", "error"])
+    poll_failed = guest_client.get(f"/app/documents/{doc.pk}/")
+    assert b'hx-trigger="every 2s"' not in poll_failed.content
+    assert b"Failed: daily allowance used" in poll_failed.content
+
+    # Cross-user: another owner cannot poll this document's row.
+    other_doc = ingest(user, Upload("secret.txt", "text/plain", b"hidden"))
+    assert guest_client.get(f"/app/documents/{other_doc.pk}/").status_code == 404

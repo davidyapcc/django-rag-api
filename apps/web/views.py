@@ -108,8 +108,10 @@ def upload(request: HttpRequest) -> HttpResponse:
         return _documents_panel(request, error="You've already uploaded that document.")
     except (IngestionError, BudgetExceededError) as exc:
         return _documents_panel(request, error=str(exc).capitalize())
-    except ProviderError:
-        return _documents_panel(request, error="The embedding service is unavailable. Try again shortly.")
+    if doc.status == Document.Status.PENDING:
+        return _documents_panel(request, notice=f"Added {doc.title} (processing…).")
+    if doc.status == Document.Status.FAILED:
+        return _documents_panel(request, error=doc.error or f"Failed to process {doc.title}.")
     return _documents_panel(request, notice=f"Added {doc.title} ({doc.chunk_count} chunks).")
 
 
@@ -120,10 +122,14 @@ def samples(request: HttpRequest) -> HttpResponse:
         added = load_samples(request.user)
     except (IngestionError, BudgetExceededError) as exc:
         return _documents_panel(request, error=str(exc).capitalize())
-    except ProviderError:
-        return _documents_panel(request, error="The embedding service is unavailable. Try again shortly.")
     notice = f"Loaded {len(added)} sample document(s)." if added else "Samples are already loaded."
     return _documents_panel(request, notice=notice)
+
+
+@login_required
+def document_row(request: HttpRequest, pk: int) -> HttpResponse:
+    doc = get_object_or_404(Document, pk=pk, owner_id=request.user.pk)
+    return render(request, "web/partials/document_row.html", {"d": doc})
 
 
 @login_required

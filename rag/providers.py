@@ -52,6 +52,10 @@ ANSWER_SCHEMA = {
 class ProviderError(Exception):
     """Raised when the upstream LLM call fails or returns unusable output."""
 
+    def __init__(self, message: str = "", *, transient: bool = True) -> None:
+        super().__init__(message)
+        self.transient = transient
+
 
 class LLMProvider(Protocol):
     name: str
@@ -147,7 +151,7 @@ class OpenAIProvider:
         import openai
 
         if not settings.OPENAI_API_KEY:
-            raise ProviderError("OPENAI_API_KEY is not set")
+            raise ProviderError("OPENAI_API_KEY is not set", transient=False)
         self._openai = openai
         self.client = openai.OpenAI(api_key=settings.OPENAI_API_KEY, timeout=30, max_retries=2)
         self.chat_model = settings.OPENAI_CHAT_MODEL
@@ -162,8 +166,11 @@ class OpenAIProvider:
                     input=texts,
                     dimensions=settings.EMBEDDING_DIM,
                 )
+            except self._openai.APIStatusError as exc:
+                transient = exc.status_code in (408, 409, 429) or exc.status_code >= 500
+                raise ProviderError(f"embedding failed: {exc}", transient=transient) from exc
             except self._openai.OpenAIError as exc:
-                raise ProviderError(f"embedding failed: {exc}") from exc
+                raise ProviderError(f"embedding failed: {exc}", transient=True) from exc
             set_attributes(
                 span,
                 gen_ai__response__model=resp.model,

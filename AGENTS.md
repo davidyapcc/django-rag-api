@@ -26,7 +26,7 @@ A change is done when every gate in `.github/workflows/ci.yml` passes locally: r
 
 - `EMBEDDING_DIM` is baked into the `Chunk.embedding` column. Changing it needs a migration and re-embedding every document.
 - Chunk size, `max_distance`, `RAG_MIN_TEXT_COVERAGE` (the full-text gate, ADR 0004) and the eval thresholds in `apps/qa/management/commands/run_eval.py` move together: tune retrieval against the eval, and raise a threshold only when the eval clears it with margin.
-- Ingestion is synchronous with a size cap on purpose: Cloud Run throttles CPU after the response, and Render's free tier can spin down or restart at any time, losing in-process work. #11 moves it to a push queue (ADR 0006). Moving it to a queue is a design change: update the README trade-offs too.
+- Ingestion runs through Django's tasks framework: Upstash QStash delivers signed HTTP callbacks in production, and `ImmediateBackend` runs tasks in-process offline (ADR 0006, superseding ADR 0002). Each callback is still one request, so the 2 MB upload cap stays.
 - Production settings force HTTPS redirects. The autouse fixture in `tests/conftest.py` disables that and pins the fake provider for every test; keep new test-wide setup there.
 
 ## Agent skills

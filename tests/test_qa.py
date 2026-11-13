@@ -97,3 +97,29 @@ def test_usage_with_no_queries(auth_api):
     usage = auth_api.get("/api/v1/queries/usage/").json()
     assert usage["queries"] == 0
     assert Decimal(usage["cost_usd"]) == 0
+
+
+def test_pending_document_not_retrieved_and_returns_409_when_named(
+    auth_api, other_user, coffee_file, settings
+):
+    from rest_framework.test import APIClient
+
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
+    pending = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart").json()
+    assert pending["status"] == "pending"
+
+    # Without document_ids, pending documents have no chunks and are not retrieved.
+    abstain = ask(auth_api, question="What grind does a French press need?")
+    assert abstain.status_code == 201
+    assert abstain.json()["citations"] == []
+
+    # Naming a pending document of the same Owner returns 409.
+    conflict = ask(auth_api, question="What grind?", document_ids=[pending["id"]])
+    assert conflict.status_code == 409
+
+    # Naming another Owner's pending document does not leak its state.
+    other_client = APIClient()
+    other_client.force_authenticate(other_user)
+    other_resp = ask(other_client, question="What grind?", document_ids=[pending["id"]])
+    assert other_resp.status_code == 201
+    assert other_resp.json()["citations"] == []

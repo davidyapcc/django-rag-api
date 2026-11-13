@@ -12,14 +12,14 @@ from rag.providers import ProviderError
 
 from .models import Query
 from .serializers import AskSerializer, QuerySerializer, UsageSummarySerializer
-from .services import PredecessorNotFoundError, ask
+from .services import DocumentNotReadyError, PredecessorNotFoundError, ask
 
 
 class AskView(generics.GenericAPIView):
     serializer_class = AskSerializer
     throttle_scope = "ask"
 
-    @extend_schema(request=AskSerializer, responses={201: QuerySerializer, 404: None})
+    @extend_schema(request=AskSerializer, responses={201: QuerySerializer, 404: None, 409: None})
     def post(self, request: Request) -> Response:
         ser = self.get_serializer(data=request.data)
         ser.is_valid(raise_exception=True)
@@ -27,6 +27,8 @@ class AskView(generics.GenericAPIView):
             query = ask(request.user, **ser.validated_data)
         except PredecessorNotFoundError:
             return Response({"detail": "Predecessor query not found."}, status=status.HTTP_404_NOT_FOUND)
+        except DocumentNotReadyError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except BudgetExceededError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
         except ProviderError:

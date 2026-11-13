@@ -12,6 +12,7 @@ _span_exporter = None
 @pytest.fixture(autouse=True)
 def _fake_provider(settings):
     settings.LLM_PROVIDER = "fake"
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.immediate.ImmediateBackend"}}
     settings.SECURE_SSL_REDIRECT = False
     # The manifest storage needs collectstatic; tests render templates without it.
     settings.STORAGES = {
@@ -60,7 +61,7 @@ def coffee_file():
 @pytest.fixture
 def uploaded(auth_api, coffee_file):
     resp = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart")
-    assert resp.status_code == 201, resp.content
+    assert resp.status_code == 202, resp.content
     return resp.json()
 
 
