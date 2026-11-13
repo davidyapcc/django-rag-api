@@ -20,7 +20,7 @@ from apps.documents.models import Document
 from apps.documents.samples import SUGGESTED_QUESTIONS, load_samples
 from apps.documents.services import DuplicateDocumentError, IngestionError, Upload, ingest
 from apps.qa.models import Query
-from apps.qa.services import ask
+from apps.qa.services import PredecessorNotFoundError, ask
 from rag.extraction import SUPPORTED_EXTENSIONS
 from rag.providers import ProviderError
 
@@ -138,18 +138,26 @@ def delete_document(request: HttpRequest, pk: int) -> HttpResponse:
 def ask_view(request: HttpRequest) -> HttpResponse:
     form = AskForm(request.POST)
     ctx: dict = {}
+    status = 200
     if not form.is_valid():
         ctx["error"] = "Type a question first."
     elif not allowed(request, "ask"):
         ctx["error"] = TOO_MANY
     else:
         try:
-            ctx["query"] = ask(request.user, form.cleaned_data["question"])
+            ctx["query"] = ask(
+                request.user,
+                form.cleaned_data["question"],
+                predecessor_id=form.cleaned_data["predecessor"],
+            )
+        except PredecessorNotFoundError:
+            ctx["error"] = "That earlier question wasn't found."
+            status = 404
         except BudgetExceededError as exc:
             ctx["error"] = str(exc)
         except ProviderError:
             ctx["error"] = "The language model is unavailable. Try again shortly."
-    response = render(request, "web/partials/answer.html", ctx)
+    response = render(request, "web/partials/answer.html", ctx, status=status)
     if "query" in ctx:
         response["HX-Trigger"] = "query-created"  # refresh the history panel
     return response

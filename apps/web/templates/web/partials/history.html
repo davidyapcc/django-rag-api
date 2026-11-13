@@ -3,7 +3,7 @@
   {% if queries %}
     <ul class="history">
       {% for q in queries %}
-        <li><strong>{{ q.question }}</strong><br><span class="muted">{{ q.answer|truncatechars:140 }}</span></li>
+        <li>{% if q.predecessor_id %}<small class="muted">Follow-up · </small>{% endif %}<strong>{{ q.question }}</strong><br><span class="muted">{{ q.answer|truncatechars:140 }}</span></li>
       {% endfor %}
     </ul>
   {% else %}

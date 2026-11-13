@@ -8,7 +8,8 @@
   <section id="documents-panel">{% include "web/partials/documents.html" %}</section>
 
   <section>
-    <article>
+    {# htmx 2 drops 4xx responses; let a 404 (an unknown follow-up predecessor) show its message. #}
+    <article hx-on:htmx:before-swap="if (event.detail.xhr.status === 404) { event.detail.shouldSwap = true; event.detail.isError = false; }">
       <header><strong>Ask</strong></header>
       <form hx-post="{% url 'web:ask' %}" hx-target="#answer" hx-indicator="#asking" hx-disabled-elt="find button">
         <fieldset role="group">

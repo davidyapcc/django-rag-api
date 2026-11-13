@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Follow-ups rewrite the question instead of passing chat history

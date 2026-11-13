@@ -15,8 +15,9 @@ Built with Django, Django REST Framework, PostgreSQL + [pgvector](https://github
 - **Auth:** registration plus JWT access/refresh tokens. Every document, chunk and query is scoped to its owner.
 - **Ingestion:** upload `.txt`, `.md` or `.pdf`, then the API extracts text, splits it into overlapping chunks, embeds them and stores the vectors in Postgres (HNSW index, cosine distance) alongside a generated full-text column (GIN index). Duplicate uploads are detected by SHA-256.
 - **Ask:** **hybrid retrieval** for that user only: a chunk is a candidate if it is near the question's embedding **or** contains most of the question's terms (so exact names, codes and ids that embeddings miss still match), and reciprocal rank fusion orders the candidates. The LLM then answers using **structured output** (`answer` + `cited_chunk_ids`). Citations are checked against the retrieved set, so a hallucinated id never reaches the client.
+- **Follow-ups:** a question can name one of the Owner's earlier Queries as its predecessor ("and the notice period?"). One extra model call rewrites it into a standalone question from the last 3 Queries in the chain (questions and answers, fenced as data), then retrieval and answering run unchanged on that question. Earlier answers never reach the answering model, so every answer still rests only on Chunks retrieved for it. The rewrite's tokens and cost count toward the Query, the Demo budget and the Allowance. See [ADR 0005](docs/adr/0005-follow-ups-rewrite-the-question.md).
 - **Cost and usage logging:** every query records input/output/embedding tokens, USD cost and latency. `GET /queries/usage/` totals them.
-- **Tracing (optional):** OpenTelemetry spans for each request, each pipeline stage (extract, chunk, embed, store; embed, retrieve, answer), every database query, and every OpenAI call (named and attributed per the GenAI semantic conventions: model, tokens, finish reason). Spans carry tokens, cost and distances, SQL with placeholders only, and never question, answer or document text, or titles. Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+- **Tracing (optional):** OpenTelemetry spans for each request, each pipeline stage (extract, chunk, embed, store; rewrite for a Follow-up, embed, retrieve, answer), every database query, and every OpenAI call (named and attributed per the GenAI semantic conventions: model, tokens, finish reason). Spans carry tokens, cost and distances, SQL with placeholders only, and never question, answer or document text, or titles. Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 - **Error tracking (optional):** Sentry captures unhandled errors and logged exceptions with stack traces, tagged with the OpenTelemetry trace id so an error links to its trace. Events are scrubbed to the same rule as spans: exception messages, log arguments, request bodies, query strings and local variables never leave the service. Off unless `SENTRY_DSN` is set.
 - **Guardrails:** relevance cut-offs on both retrieval gates mean the model is never called when nothing relevant is retrieved. Retrieved text is fenced and treated as data, not instructions (prompt-injection hygiene). There are per-user rate limits on `/ask` and uploads, and an upload size cap.
 - **Web demo:** a server-rendered UI (Django templates + HTMX) with one-click **Guest** accounts that expire after 24 hours, **Sample documents** with suggested questions, and answers that expand to show the cited chunks and what the question cost.
@@ -54,7 +55,7 @@ flowchart LR
 
 ## Web UI
 
-`/` is the landing page. "Try it as a guest" creates a throwaway account and opens `/app/`, which has three panels: **Documents** (load samples, upload, delete), **Ask** (answer, expandable citations, tokens, cost and latency) and **History** (recent questions and total cost).
+`/` is the landing page. "Try it as a guest" creates a throwaway account and opens `/app/`, which has three panels: **Documents** (load samples, upload, delete), **Ask** (answer, expandable citations, tokens, cost and latency, and "Ask a follow-up", which shows the standalone question it searched for) and **History** (recent questions and total cost).
 
 The pages use Django session login and call the same service functions as the API, so tenant isolation, citation checks, rate limits, the Demo budget and Allowances apply to both. Guests get smaller limits (5 documents, 500 KB per upload). Expired Guests are deleted whenever a new Guest is created, since the free host has no scheduler; `manage.py purge_guests` does the same on demand. The domain vocabulary lives in [`CONTEXT.md`](CONTEXT.md).
 
@@ -71,7 +72,7 @@ Interactive docs are at `/api/docs/` (OpenAPI 3 via drf-spectacular).
 | GET / POST | `/api/v1/documents/` | List / upload (multipart `file`, optional `title`) |
 | GET / DELETE | `/api/v1/documents/{id}/` | Retrieve / delete (cascades to chunks) |
 | GET | `/api/v1/documents/{id}/chunks/` | Inspect how a document was chunked |
-| POST | `/api/v1/ask/` | `{"question": "...", "document_ids": [..], "top_k": 5}` |
+| POST | `/api/v1/ask/` | `{"question": "...", "document_ids": [..], "top_k": 5, "predecessor": 12}` (`predecessor` optional: makes it a Follow-up; 404 if it isn't your Query) |
 | GET | `/api/v1/queries/` | Query history with citations and cost |
 | GET | `/api/v1/queries/usage/` | Token and cost totals |
 | GET | `/api/v1/health/` | Liveness + DB check |
@@ -86,6 +87,10 @@ curl -s -X POST localhost:8000/api/v1/ask/ \
 
 ```json
 {
+  "id": 13,
+  "predecessor": null,
+  "question": "How long does bulk fermentation take?",
+  "standalone_question": null,
   "answer": "Bulk fermentation usually takes four to six hours at 24 degrees Celsius.",
   "citations": [{"chunk_id": 10, "document_id": 7, "document_title": "sourdough.md", "index": 0, "text": "..."}],
   "provider": "openai",
@@ -97,6 +102,8 @@ curl -s -X POST localhost:8000/api/v1/ask/ \
   "latency_ms": 1180
 }
 ```
+
+A Follow-up returns the question as asked plus the `standalone_question` that retrieval and answering ran on.
 
 ## Run locally
 
@@ -155,7 +162,7 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 - **Hybrid search with two gates, not one fused cut-off.** Each gate has its own relevance floor (vector distance, share of the question's terms) and fusion only orders what passed, so the model is still never called for an off-topic question. The full-text floor is a share of terms rather than `ts_rank_cd` because Postgres ranks have no IDF. See [ADR 0004](docs/adr/0004-hybrid-search-two-gates-and-a-coverage-floor.md).
 - **`owner` denormalised onto `Chunk`.** Retrieval filters by owner without a join, and tenant isolation is enforced in the one query that matters. A composite foreign key to `Document(id, owner)` stops the copy from drifting from its document's owner.
 - **Synchronous ingestion with a size cap (2 MB).** It keeps the system simple and is correct on platforms that throttle CPU after a response is sent. The next step at scale would be a queue (Celery, or Cloud Tasks) with a `processing` status.
-- **Provider interface.** OpenAI and the fake provider implement the same two methods (`embed`, `answer`). Swapping to another vendor is one class plus one setting. Each provider owns its relevance cut-off because embedding models differ in scale.
+- **Provider interface.** OpenAI and the fake provider implement the same three methods (`embed`, `answer`, `rewrite`). Swapping to another vendor is one class plus one setting. Each provider owns its relevance cut-off because embedding models differ in scale.
 - **Structured output plus server-side citation validation.** JSON-schema output removes brittle parsing, and filtering cited ids against what was actually retrieved means the API never returns a citation it can't back up.
 - **Spend tracked per day, in ledgers.** The Demo budget reads a `DailySpend` ledger and each Owner's Allowance an `OwnerDailySpend` ledger, rather than summing Queries and Documents, so deleting a Guest or a Document never hands budget back.
 - **Allowance per day, not per month.** It shares the Demo budget's window: a monthly per-user cap wouldn't stop one Owner using up today's shared budget, and Guests only live 24 hours. Registering again gets a fresh Allowance, so the Demo budget stays the real backstop; the Allowance is about fairness.
@@ -168,8 +175,7 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 
 In build order; each issue carries the agent brief.
 
-1. Follow-up questions that rewrite into a standalone question ([#9](https://github.com/davidyapcc/django-rag-api/issues/9))
-2. Async ingestion through a push queue (QStash), so no worker is needed on the free host ([#11](https://github.com/davidyapcc/django-rag-api/issues/11))
+1. Async ingestion through a push queue (QStash), so no worker is needed on the free host ([#11](https://github.com/davidyapcc/django-rag-api/issues/11))
 
 Considered and declined (reasons and what would reopen them are in [`.out-of-scope/`](.out-of-scope/)): streaming answers.
 

@@ -1,6 +1,9 @@
 {% if error %}
   <p class="flash flash-error" role="alert">{{ error }}</p>
 {% elif query %}
+  {% if query.standalone_question %}
+    <p class="muted"><small>Follow-up. Searched for: <q>{{ query.standalone_question }}</q></small></p>
+  {% endif %}
   <blockquote>{{ query.answer }}</blockquote>
   {% with citations=query.cited_chunks.all %}
     {% if citations %}
@@ -16,4 +19,11 @@
     {% endif %}
   {% endwith %}
   <small class="muted meta">{{ query.model }} · {{ query.input_tokens }} in / {{ query.output_tokens }} out tokens · ${{ query.cost_usd|floatformat:6 }} · {{ query.latency_ms }} ms</small>
+  <form class="follow-up" hx-post="{% url 'web:ask' %}" hx-target="#answer" hx-indicator="#asking" hx-disabled-elt="find button">
+    <input type="hidden" name="predecessor" value="{{ query.pk }}">
+    <fieldset role="group">
+      <input type="text" name="question" maxlength="2000" required placeholder="Ask a follow-up" aria-label="Ask a follow-up">
+      <button type="submit" class="secondary">Ask a follow-up</button>
+    </fieldset>
+  </form>
 {% endif %}

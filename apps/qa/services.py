@@ -3,6 +3,7 @@
 import logging
 import time
 from dataclasses import dataclass
+from typing import cast
 
 from django.conf import settings
 from django.db import connection
@@ -11,15 +12,22 @@ from pgvector.django import CosineDistance
 from apps.core import budget
 from apps.documents.models import Chunk
 from rag.pricing import chat_cost, embedding_cost
-from rag.providers import get_provider
+from rag.providers import LLMProvider, get_provider
 from rag.tracing import set_attributes, stage
-from rag.types import AnswerResult, ContextChunk, Usage
+from rag.types import AnswerResult, ContextChunk, EarlierQuery, RewriteResult, Usage
 
 from .models import Query
 
 logger = logging.getLogger(__name__)
 
 NO_ANSWER = "I don't know based on the uploaded documents."
+
+# How many Queries of a Follow-up chain the rewrite sees: the predecessor and up to 2 of its own.
+FOLLOW_UP_HISTORY_LENGTH = 3
+
+
+class PredecessorNotFoundError(Exception):
+    """The named predecessor does not exist or belongs to another Owner (indistinguishable on purpose)."""
 
 
 RRF_K = 60  # the usual reciprocal rank fusion constant; only orders candidates, never gates them
@@ -111,12 +119,21 @@ def retrieve(
     ]
 
 
-def ask(owner, question: str, document_ids: list[int] | None = None, top_k: int | None = None) -> Query:
+def ask(
+    owner,
+    question: str,
+    document_ids: list[int] | None = None,
+    top_k: int | None = None,
+    predecessor_id: int | None = None,
+) -> Query:
+    """Answer a question from the Owner's Chunks. With `predecessor_id` the Query is a Follow-up:
+    it is first rewritten into a standalone question, which retrieval and answering then use."""
     with stage("ask", owner__id=owner.pk) as span:
-        query = _ask(owner, question, document_ids, top_k)
+        query = _ask(owner, question, document_ids, top_k, predecessor_id)
         set_attributes(
             span,
             query__id=query.pk,
+            query__is_follow_up=query.predecessor_id is not None,
             query__abstained=not query.retrieved_chunk_ids,
             query__cited_count=query.cited_chunks.count(),
             cost_usd=float(query.cost_usd),
@@ -125,17 +142,61 @@ def ask(owner, question: str, document_ids: list[int] | None = None, top_k: int 
         return query
 
 
-def _ask(owner, question: str, document_ids: list[int] | None, top_k: int | None) -> Query:
+def _predecessor(owner, predecessor_id: int | None) -> Query | None:
+    if predecessor_id is None:
+        return None
+    found = (
+        Query.objects.filter(owner=owner, pk=predecessor_id)
+        .select_related("predecessor__predecessor")
+        .first()
+    )
+    if found is None:
+        raise PredecessorNotFoundError
+    return found
+
+
+def _history(predecessor: Query) -> list[EarlierQuery]:
+    """The last FOLLOW_UP_HISTORY_LENGTH Queries of the chain, oldest first. An earlier Follow-up
+    contributes its standalone question, which already carries its own context."""
+    chain = [predecessor]
+    while len(chain) < FOLLOW_UP_HISTORY_LENGTH and chain[-1].predecessor_id is not None:
+        chain.append(cast(Query, chain[-1].predecessor))
+    return [EarlierQuery(q.standalone_question or q.question, q.answer) for q in reversed(chain)]
+
+
+def _rewrite(provider: LLMProvider, question: str, predecessor: Query) -> RewriteResult:
+    history = _history(predecessor)
+    with stage("ask.rewrite", llm__provider=provider.name, history_count=len(history)) as span:
+        result = provider.rewrite(question, history)
+        set_attributes(
+            span,
+            llm__model=result.model,
+            llm__input_tokens=result.usage.input_tokens,
+            llm__output_tokens=result.usage.output_tokens,
+        )
+    return result
+
+
+def _ask(
+    owner, question: str, document_ids: list[int] | None, top_k: int | None, predecessor_id: int | None
+) -> Query:
+    predecessor = _predecessor(owner, predecessor_id)
     budget.ensure_available(owner)
     started = time.monotonic()
     provider = get_provider()
     top_k = top_k or settings.RAG_TOP_K
 
+    rewrite = _rewrite(provider, question, predecessor) if predecessor else None
+    # Earlier answers stop here: from this point on only the standalone question is used.
+    search_question = rewrite.question if rewrite else question
+
     with stage("ask.embed", llm__provider=provider.name) as span:
-        embedded = provider.embed([question])
+        embedded = provider.embed([search_question])
         set_attributes(span, llm__embedding_tokens=embedded.usage.input_tokens)
     with stage("ask.retrieve", top_k=top_k, max_distance=provider.max_distance) as span:
-        hits = retrieve(owner, question, embedded.vectors[0], top_k, provider.max_distance, document_ids)
+        hits = retrieve(
+            owner, search_question, embedded.vectors[0], top_k, provider.max_distance, document_ids
+        )
         set_attributes(
             span,
             retrieved_count=len(hits),
@@ -147,7 +208,7 @@ def _ask(owner, question: str, document_ids: list[int] | None, top_k: int | None
     if hits:
         context = [ContextChunk(h.chunk.pk, h.chunk.document.title, h.chunk.text) for h in hits]
         with stage("ask.answer", llm__provider=provider.name, chunk_count=len(context)) as span:
-            result = provider.answer(question, context)
+            result = provider.answer(search_question, context)
             set_attributes(
                 span,
                 llm__model=result.model,
@@ -162,17 +223,20 @@ def _ask(owner, question: str, document_ids: list[int] | None, top_k: int | None
     retrieved_ids = [h.chunk.pk for h in hits]
     cited = [cid for cid in dict.fromkeys(result.cited_chunk_ids) if cid in retrieved_ids]
 
+    chat_usage = result.usage + rewrite.usage if rewrite else result.usage
     query = Query.objects.create(
         owner=owner,
+        predecessor=predecessor,
         question=question,
+        standalone_question=rewrite.question if rewrite else None,
         answer=result.answer,
         retrieved_chunk_ids=retrieved_ids,
         provider=provider.name,
         model=result.model,
-        input_tokens=result.usage.input_tokens,
-        output_tokens=result.usage.output_tokens,
+        input_tokens=chat_usage.input_tokens,
+        output_tokens=chat_usage.output_tokens,
         embedding_tokens=embedded.usage.input_tokens,
-        cost_usd=chat_cost(result.usage) + embedding_cost(embedded.usage),
+        cost_usd=chat_cost(chat_usage) + embedding_cost(embedded.usage),
         latency_ms=int((time.monotonic() - started) * 1000),
     )
     query.cited_chunks.set(cited)

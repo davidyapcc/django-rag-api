@@ -9,6 +9,12 @@ class AskSerializer(serializers.Serializer):
     question = serializers.CharField(max_length=2000)
     document_ids = serializers.ListField(child=serializers.IntegerField(), required=False, max_length=50)
     top_k = serializers.IntegerField(required=False, min_value=1, max_value=20)
+    predecessor = serializers.IntegerField(
+        required=False,
+        min_value=1,
+        source="predecessor_id",
+        help_text="An earlier Query of yours; makes this Query a Follow-up.",
+    )
 
 
 class CitationSerializer(serializers.ModelSerializer):
@@ -28,7 +34,9 @@ class QuerySerializer(serializers.ModelSerializer):
         model = Query
         fields = [
             "id",
+            "predecessor",
             "question",
+            "standalone_question",
             "answer",
             "citations",
             "provider",

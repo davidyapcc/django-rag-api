@@ -3,10 +3,16 @@ from django.db import models
 
 
 class Query(models.Model):
-    """One /ask call: what was asked, what came back, and what it cost."""
+    """One /ask call: what was asked, what came back, and what it cost. A Query with a
+    predecessor is a Follow-up: retrieval and answering ran on its standalone question."""
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="queries")
-    question = models.TextField()
+    predecessor = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="follow_ups"
+    )
+    question = models.TextField()  # as asked
+    # Set only on a Follow-up: what retrieval and answering actually ran on.
+    standalone_question = models.TextField(null=True, blank=True)  # noqa: DJ001
     answer = models.TextField()
     cited_chunks = models.ManyToManyField("documents.Chunk", blank=True, related_name="+")
     retrieved_chunk_ids = models.JSONField(default=list)
