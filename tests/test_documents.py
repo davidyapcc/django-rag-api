@@ -130,8 +130,7 @@ def test_moving_a_document_moves_its_chunks(uploaded, other_user):
     assert set(Chunk.objects.filter(document=doc).values_list("owner", flat=True)) == {other_user.pk}
 
 
-def test_pending_document_lifecycle_and_isolation(auth_api, other_user, coffee_file, settings):
-    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
+def test_pending_document_lifecycle_and_isolation(auth_api, other_user, coffee_file, dummy_tasks):
     resp = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart")
     assert resp.status_code == 202
     data = resp.json()
@@ -149,10 +148,9 @@ def test_pending_document_lifecycle_and_isolation(auth_api, other_user, coffee_f
     assert other_client.get(f"/api/v1/documents/{doc.pk}/").status_code == 404
 
 
-def test_ingest_document_is_idempotent(user, settings):
+def test_ingest_document_is_idempotent(user, dummy_tasks):
     from apps.documents.services import Upload, ingest, ingest_document
 
-    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
     doc = ingest(user, Upload("coffee.md", "text/markdown", COFFEE))
     assert doc.status == Document.Status.PENDING
 
@@ -165,3 +163,28 @@ def test_ingest_document_is_idempotent(user, settings):
 
     ingest_document.call(doc.pk)
     assert Chunk.objects.filter(document=doc).count() == first_count
+
+
+def test_failed_publish_marks_document_failed_and_allows_reupload(
+    auth_api, coffee_file, settings, monkeypatch
+):
+    from apps.documents import qstash
+
+    settings.TASKS = {"default": {"BACKEND": "apps.documents.qstash.QStashBackend"}}
+    settings.QSTASH_TOKEN = "tok-test"
+
+    def broken_post(url: str, headers: dict[str, str], body: bytes) -> dict:
+        raise OSError("qstash down")
+
+    monkeypatch.setattr(qstash, "_post", broken_post)
+    resp = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart")
+    assert resp.status_code == 502
+    doc = Document.objects.get()
+    assert doc.status == Document.Status.FAILED
+
+    # Subsequent upload with working backend succeeds rather than returning 409 duplicate.
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.immediate.ImmediateBackend"}}
+    coffee_file.seek(0)
+    retry_resp = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart")
+    assert retry_resp.status_code == 202
+    assert retry_resp.json()["status"] == "ready"

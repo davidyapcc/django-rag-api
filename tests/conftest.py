@@ -26,6 +26,11 @@ def _fake_provider(settings):
 
 
 @pytest.fixture
+def dummy_tasks(settings):
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
+
+
+@pytest.fixture
 def user(db):
     return get_user_model().objects.create_user(username="alice", password="s3cure-Passw0rd!")
 

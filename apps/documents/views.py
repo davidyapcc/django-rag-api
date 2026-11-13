@@ -1,11 +1,11 @@
-import base64
-import json
 from pathlib import Path
 
+from django.conf import settings
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from drf_spectacular.utils import extend_schema
+from opentelemetry import trace
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import MultiPartParser
@@ -15,8 +15,10 @@ from rest_framework.response import Response
 from apps.core.budget import BudgetExceededError
 from rag.extraction import SUPPORTED_EXTENSIONS
 from rag.providers import ProviderError
+from rag.tracing import set_attributes
 
 from .models import Document
+from .qstash import parse_document_id, verify_qstash_signature
 from .serializers import ChunkSerializer, DocumentSerializer, DocumentUploadSerializer
 from .services import (
     DuplicateDocumentError,
@@ -26,7 +28,6 @@ from .services import (
     ingest,
     ingest_document,
 )
-from .tasks import verify_qstash_signature
 
 
 class DocumentViewSet(
@@ -68,6 +69,8 @@ class DocumentViewSet(
             return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
         except IngestionError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        except ProviderError:
+            return Response({"detail": "embedding provider unavailable"}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(DocumentSerializer(doc).data, status=status.HTTP_202_ACCEPTED)
 
     @extend_schema(responses={200: ChunkSerializer(many=True)})
@@ -78,46 +81,29 @@ class DocumentViewSet(
         return self.get_paginated_response(ChunkSerializer(page, many=True).data)
 
 
-def _parse_document_id(body: bytes, *, allow_source_body: bool = False) -> int | None:
-    try:
-        payload = json.loads(body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    if allow_source_body and "sourceBody" in payload and "document_id" not in payload:
-        try:
-            raw_source = base64.b64decode(payload["sourceBody"])
-            payload = json.loads(raw_source)
-        except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
-            return None
-        if not isinstance(payload, dict):
-            return None
-    document_id = payload.get("document_id")
-    if isinstance(document_id, bool) or not isinstance(document_id, int):
-        return None
-    return document_id
-
-
-def _verified_document_id(
-    request: HttpRequest, *, allow_source_body: bool = False
-) -> tuple[int | None, HttpResponse | None]:
-    if not verify_qstash_signature(request.body, request.headers.get("Upstash-Signature", "")):
-        return None, JsonResponse({"detail": "invalid signature"}, status=401)
-    document_id = _parse_document_id(request.body, allow_source_body=allow_source_body)
+def _verified_document_id(request: HttpRequest, *, allow_source_body: bool = False) -> int | HttpResponse:
+    expected_url = f"{settings.QSTASH_CALLBACK_BASE_URL.rstrip('/')}{request.path}"
+    if not verify_qstash_signature(
+        request.body, request.headers.get("Upstash-Signature", ""), url=expected_url
+    ):
+        return JsonResponse({"detail": "invalid signature"}, status=401)
+    document_id = parse_document_id(request.body, allow_source_body=allow_source_body)
     if document_id is None:
-        return None, JsonResponse({"detail": "invalid payload"}, status=400)
-    return document_id, None
+        return JsonResponse({"detail": "invalid payload"}, status=400)
+    raw_retried = request.headers.get("Upstash-Retried")
+    retried = int(raw_retried) if raw_retried and raw_retried.isdigit() else None
+    set_attributes(trace.get_current_span(), document__id=document_id, upstash__retried=retried)
+    return document_id
 
 
 @csrf_exempt
 @require_POST
 def ingest_callback(request: HttpRequest) -> HttpResponse:
-    document_id, error = _verified_document_id(request)
-    if error is not None or document_id is None:
-        return error or JsonResponse({"detail": "invalid payload"}, status=400)
+    doc_or_err = _verified_document_id(request)
+    if isinstance(doc_or_err, HttpResponse):
+        return doc_or_err
     try:
-        ingest_document.call(document_id)
+        ingest_document.call(doc_or_err)
     except ProviderError:
         return JsonResponse({"detail": "embedding provider unavailable"}, status=502)
     return JsonResponse({"status": "ok"}, status=200)
@@ -126,8 +112,8 @@ def ingest_callback(request: HttpRequest) -> HttpResponse:
 @csrf_exempt
 @require_POST
 def ingest_failure_callback(request: HttpRequest) -> HttpResponse:
-    document_id, error = _verified_document_id(request, allow_source_body=True)
-    if error is not None or document_id is None:
-        return error or JsonResponse({"detail": "invalid payload"}, status=400)
-    fail_document(document_id)
+    doc_or_err = _verified_document_id(request, allow_source_body=True)
+    if isinstance(doc_or_err, HttpResponse):
+        return doc_or_err
+    fail_document(doc_or_err)
     return JsonResponse({"status": "ok"}, status=200)

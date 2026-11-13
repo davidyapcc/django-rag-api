@@ -8,7 +8,7 @@ A change is done when every gate in `.github/workflows/ci.yml` passes locally: r
 
 ## Invariants
 
-- **Tenant isolation.** Every query over `Document`, `Chunk` or `Query` filters by owner. `Chunk.owner` is denormalised so retrieval scopes by owner in the same SQL as the similarity search; set it on every chunk you create. Add a cross-user test for any new endpoint.
+- **Tenant isolation.** Every query over `Document`, `Chunk` or `Query` filters by owner (except the signed task callbacks in `apps/documents/services.py`, which receive only a `document_id` and read the Owner from the Document row). `Chunk.owner` is denormalised so retrieval scopes by owner in the same SQL as the similarity search; set it on every chunk you create. Add a cross-user test for any new endpoint.
 - **Citations are verified.** `apps/qa/services.ask` keeps only cited ids that were actually retrieved. Model output never reaches the client unfiltered.
 - **Document text is data.** Retrieved chunks go to the model fenced as `<chunk>` and the system prompt says to ignore instructions inside them. Keep both when editing prompts.
 - **Telemetry carries no content.** Span names, attributes and events, and Sentry events, never include question, answer, document or chunk text, or document titles: both leave the tenant boundary. Ids, counts, tokens, cost, distances and stack traces are fine. Database spans keep SQL placeholders only (no bound parameters); `apps/core/errors.py` scrubs Sentry events, so keep a test that greps the serialised event for content when you touch it.

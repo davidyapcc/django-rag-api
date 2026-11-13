@@ -100,11 +100,10 @@ def test_usage_with_no_queries(auth_api):
 
 
 def test_pending_document_not_retrieved_and_returns_409_when_named(
-    auth_api, other_user, coffee_file, settings
+    auth_api, other_user, coffee_file, dummy_tasks
 ):
     from rest_framework.test import APIClient
 
-    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
     pending = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart").json()
     assert pending["status"] == "pending"
 

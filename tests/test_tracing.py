@@ -92,10 +92,9 @@ def test_abstained_ask_has_no_answer_span(spans, user):
     assert by_name["ask"].attributes["query.abstained"] is True
 
 
-def test_errors_are_recorded_by_type_only(spans, user, monkeypatch, settings):
+def test_errors_are_recorded_by_type_only(spans, user, monkeypatch, dummy_tasks):
     from apps.documents.services import ingest_document
 
-    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
     doc = ingest(user, Upload("c.txt", "text/plain", b"French press needs a coarse grind."))
     spans.clear()
 
@@ -121,3 +120,56 @@ def test_database_calls_are_spans_without_parameters(spans, auth_api, uploaded):
     for s in db:
         assert "db.statement.parameters" not in s.attributes
         assert "%s" in s.attributes["db.statement"] or "%(" in s.attributes["db.statement"]
+
+
+def test_qstash_trace_context_links_upload_and_callback_spans(
+    spans, auth_api, client, coffee_file, settings, monkeypatch
+):
+    from apps.documents import qstash
+    from tests.test_tasks import SIGNING_KEY, sign_qstash_body
+
+    settings.TASKS = {"default": {"BACKEND": "apps.documents.qstash.QStashBackend"}}
+    settings.QSTASH_TOKEN = "tok-test"
+    settings.QSTASH_CURRENT_SIGNING_KEY = SIGNING_KEY
+    settings.QSTASH_CALLBACK_BASE_URL = "http://localhost:8000"
+
+    published: dict = {}
+
+    def fake_post(url: str, headers: dict[str, str], body: bytes) -> dict:
+        published["headers"] = headers
+        published["body"] = body
+        return {"messageId": "msg_trace"}
+
+    monkeypatch.setattr(qstash, "_post", fake_post)
+
+    upload_resp = auth_api.post("/api/v1/documents/", {"file": coffee_file}, format="multipart")
+    assert upload_resp.status_code == 202
+    assert "Upstash-Forward-traceparent" in published["headers"]
+    assert "Upstash-Failure-Callback-Forward-traceparent" in published["headers"]
+
+    upload_trace_id = _by_name(spans)["ingest"].context.trace_id
+    spans.clear()
+
+    callback_url = "http://localhost:8000/api/v1/tasks/ingest/"
+    sig = sign_qstash_body(published["body"], SIGNING_KEY, url=callback_url)
+    cb_resp = client.post(
+        "/api/v1/tasks/ingest/",
+        data=published["body"],
+        content_type="application/json",
+        HTTP_UPSTASH_SIGNATURE=sig,
+        HTTP_TRACEPARENT=published["headers"]["Upstash-Forward-traceparent"],
+        HTTP_UPSTASH_RETRIED="2",
+    )
+    assert cb_resp.status_code == 200
+
+    finished = spans.get_finished_spans()
+    by_name = _by_name(spans)
+    server_span = next(s for s in finished if s.kind == SpanKind.SERVER)
+    assert server_span.context.trace_id == upload_trace_id
+    assert server_span.attributes["document.status"] == "ready"
+    assert server_span.attributes["upstash.retried"] == 2
+    for stage in ("ingest.chunk", "ingest.embed", "ingest.store"):
+        assert by_name[stage].context.trace_id == upload_trace_id
+    text = _all_span_text(spans).lower()
+    assert "french press" not in text
+    assert "coffee.md" not in text

@@ -125,13 +125,14 @@ def test_empty_question(guest_client):
 
 
 def test_provider_errors_are_friendly(guest_client, monkeypatch):
-    def boom(self, *a, **kw):
-        raise ProviderError("down", transient=False)
+    def boom(self, *a):
+        raise ProviderError("down")
 
     monkeypatch.setattr(providers.FakeProvider, "embed", boom)
     assert b"unavailable" in guest_client.post("/app/ask/", {"question": "q"}).content
     resp = guest_client.post("/app/documents/upload/", {"file": SimpleUploadedFile("t.txt", b"Hi.")})
-    assert b"Failed" in resp.content
+    assert b"unavailable" in resp.content
+    assert b"unavailable" in guest_client.post("/app/documents/samples/").content
 
 
 def test_samples_twice(guest_client):
@@ -181,10 +182,9 @@ def test_history_counts_only_own_queries(guest_client, user):
     assert b"secret" not in guest_client.get("/app/history/").content
 
 
-def test_pending_document_polls_until_ready_or_failed(guest_client, user, settings):
-    from apps.documents.services import Upload, ingest, ingest_document
+def test_pending_document_polls_until_ready_or_failed(guest_client, dummy_tasks):
+    from apps.documents.services import ingest_document
 
-    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
     resp = guest_client.post(
         "/app/documents/upload/", {"file": SimpleUploadedFile("tea.txt", b"Steep green tea.")}
     )
@@ -213,6 +213,11 @@ def test_pending_document_polls_until_ready_or_failed(guest_client, user, settin
     assert b'hx-trigger="every 2s"' not in poll_failed.content
     assert b"Failed: daily allowance used" in poll_failed.content
 
-    # Cross-user: another owner cannot poll this document's row.
-    other_doc = ingest(user, Upload("secret.txt", "text/plain", b"hidden"))
+
+def test_cannot_see_or_poll_another_owners_pending_document(guest_client, user, dummy_tasks):
+    from apps.documents.services import Upload, ingest
+
+    other_doc = ingest(user, Upload("secret-pending.txt", "text/plain", b"hidden"))
+    assert other_doc.status == Document.Status.PENDING
+    assert b"secret-pending.txt" not in guest_client.get("/app/").content
     assert guest_client.get(f"/app/documents/{other_doc.pk}/").status_code == 404

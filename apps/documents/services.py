@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from django.conf import settings
 from django.db import transaction
 from django.tasks import task
+from django.tasks.base import TaskResultStatus
+from opentelemetry import trace
 
 from apps.accounts.services import is_guest
 from apps.core import budget
@@ -60,9 +62,21 @@ def check_upload_allowed(owner, size_bytes: int) -> None:
 def ingest(owner, upload: Upload) -> Document:
     with stage("ingest", owner__id=owner.pk, document__size_bytes=len(upload.data)) as span:
         doc = _accept_upload(owner, upload)
-        ingest_document.enqueue(doc.pk)
+        try:
+            result = ingest_document.enqueue(doc.pk)
+        except Exception as exc:
+            _mark_failed(doc, "ingestion queue unavailable")
+            raise ProviderError("ingestion queue unavailable") from exc
+        if result.status == TaskResultStatus.FAILED:
+            _mark_failed(doc, "embedding provider unavailable")
+            raise ProviderError("embedding provider unavailable")
         doc.refresh_from_db()
-        set_attributes(span, document__id=doc.pk, document__chunk_count=doc.chunk_count)
+        set_attributes(
+            span,
+            document__id=doc.pk,
+            document__status=doc.status,
+            document__chunk_count=doc.chunk_count,
+        )
         return doc
 
 
@@ -71,7 +85,9 @@ def _accept_upload(owner, upload: Upload) -> Document:
     sha = hashlib.sha256(upload.data).hexdigest()
     existing = Document.objects.filter(owner=owner, sha256=sha).first()
     if existing:
-        raise DuplicateDocumentError(existing)
+        if existing.status != Document.Status.FAILED:
+            raise DuplicateDocumentError(existing)
+        existing.delete()
 
     budget.ensure_available(owner)
     with stage("ingest.extract", document__content_type=upload.content_type):
@@ -97,12 +113,18 @@ def _mark_failed(doc: Document, error: str) -> None:
     doc.status = Document.Status.FAILED
     doc.error = error
     doc.save(update_fields=["status", "error"])
+    set_attributes(trace.get_current_span(), document__id=doc.pk, document__status=doc.status)
 
 
 @task
 def ingest_document(document_id: int) -> None:
+    parent = trace.get_current_span()
+    set_attributes(parent, document__id=document_id)
     doc = Document.objects.select_related("owner").filter(pk=document_id).first()
-    if doc is None or doc.status != Document.Status.PENDING:
+    if doc is None:
+        return
+    if doc.status != Document.Status.PENDING:
+        set_attributes(parent, document__status=doc.status)
         return
 
     try:
@@ -129,7 +151,7 @@ def ingest_document(document_id: int) -> None:
                     vectors.extend(result.vectors)
                     tokens += result.usage.input_tokens
             except ProviderError:
-                logger.exception("embedding failed for %s", doc.title)
+                logger.warning("embedding failed for %s", doc.title)
                 raise
             finally:
                 cost = embedding_cost(Usage(input_tokens=tokens))
@@ -139,10 +161,11 @@ def ingest_document(document_id: int) -> None:
         if not exc.transient:
             _mark_failed(doc, str(exc) or "embedding failed")
             return
+        set_attributes(parent, document__status=doc.status)
         raise
 
     with stage("ingest.store", chunk_count=len(pieces)), transaction.atomic():
-        locked = Document.objects.select_for_update().get(pk=doc.pk)
+        locked = Document.objects.select_for_update().get(pk=doc.pk, owner=doc.owner)
         if locked.status != Document.Status.PENDING:
             return
         Chunk.objects.bulk_create(
@@ -154,14 +177,19 @@ def ingest_document(document_id: int) -> None:
         locked.chunk_count = len(pieces)
         locked.embedding_tokens = tokens
         locked.save(update_fields=["status", "error", "chunk_count", "embedding_tokens"])
+    set_attributes(parent, document__status=Document.Status.READY, document__chunk_count=len(pieces))
     logger.info("ingested document=%s chunks=%d tokens=%d", doc.pk, len(pieces), tokens)
 
 
 def fail_document(document_id: int, error: str = "embedding provider unavailable") -> None:
-    Document.objects.filter(pk=document_id, status=Document.Status.PENDING).update(
-        status=Document.Status.FAILED,
-        error=error,
-    )
+    doc = Document.objects.filter(pk=document_id).first()
+    if doc is None:
+        return
+    if doc.status == Document.Status.PENDING:
+        _mark_failed(doc, error)
+        logger.error("embedding failed for %s", doc.title)
+    else:
+        set_attributes(trace.get_current_span(), document__id=doc.pk, document__status=doc.status)
 
 
 def max_upload_bytes() -> int:

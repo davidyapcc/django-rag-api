@@ -171,15 +171,10 @@ GUEST_MAX_UPLOAD_BYTES = env("GUEST_MAX_UPLOAD_BYTES")
 
 _TASK_BACKENDS = {
     "immediate": "django.tasks.backends.immediate.ImmediateBackend",
-    "dummy": "django.tasks.backends.dummy.DummyBackend",
-    "qstash": "apps.documents.tasks.QStashBackend",
+    "qstash": "apps.documents.qstash.QStashBackend",
 }
 TASK_BACKEND = env("TASK_BACKEND")
-TASKS = {
-    "default": {
-        "BACKEND": _TASK_BACKENDS.get(TASK_BACKEND, TASK_BACKEND),
-    }
-}
+TASKS = {"default": {"BACKEND": _TASK_BACKENDS[TASK_BACKEND]}}
 QSTASH_URL = env("QSTASH_URL")
 QSTASH_TOKEN = env("QSTASH_TOKEN")
 QSTASH_CURRENT_SIGNING_KEY = env("QSTASH_CURRENT_SIGNING_KEY")

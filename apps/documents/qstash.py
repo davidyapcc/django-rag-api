@@ -18,6 +18,35 @@ from django.tasks.signals import task_enqueued
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.crypto import get_random_string
+from opentelemetry import propagate
+
+_TASK_ROUTES: dict[str, tuple[str, str]] = {
+    "apps.documents.services.ingest_document": ("ingest-callback", "ingest-failure-callback"),
+}
+
+
+def _as_document_id(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def parse_document_id(body: bytes, *, allow_source_body: bool = False) -> int | None:
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if allow_source_body and "sourceBody" in payload and "document_id" not in payload:
+        try:
+            raw_source = base64.b64decode(payload["sourceBody"])
+            payload = json.loads(raw_source)
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+    return _as_document_id(payload.get("document_id"))
 
 
 def _post(url: str, headers: dict[str, str], body: bytes) -> dict[str, Any]:
@@ -34,20 +63,25 @@ class QStashBackend(BaseTaskBackend):
 
     def enqueue(self, task, args, kwargs) -> TaskResult:
         self.validate_task(task)
-        if "document_id" in kwargs:
-            document_id = kwargs["document_id"]
+        routes = _TASK_ROUTES.get(task.module_path)
+        if routes is None:
+            raise InvalidTask(f"QStashBackend has no callback route for {task.module_path}")
+        if "document_id" in kwargs and len(kwargs) == 1 and not args:
+            raw_id = kwargs["document_id"]
         elif len(args) == 1 and not kwargs:
-            document_id = args[0]
+            raw_id = args[0]
         else:
             raise InvalidTask("QStashBackend expects a single integer document_id.")
-        if isinstance(document_id, bool) or not isinstance(document_id, int):
+        document_id = _as_document_id(raw_id)
+        if document_id is None:
             raise InvalidTask("document_id must be an integer.")
         if not settings.QSTASH_TOKEN:
             raise ValueError("QSTASH_TOKEN is not set")
 
+        callback_name, failure_name = routes
         base = settings.QSTASH_CALLBACK_BASE_URL.rstrip("/")
-        callback_url = f"{base}{reverse('ingest-callback')}"
-        failure_url = f"{base}{reverse('ingest-failure-callback')}"
+        callback_url = f"{base}{reverse(callback_name)}"
+        failure_url = f"{base}{reverse(failure_name)}"
         publish_url = f"{settings.QSTASH_URL.rstrip('/')}/v2/publish/{callback_url}"
 
         headers = {
@@ -55,6 +89,12 @@ class QStashBackend(BaseTaskBackend):
             "Content-Type": "application/json",
             "Upstash-Failure-Callback": failure_url,
         }
+        carrier: dict[str, str] = {}
+        propagate.inject(carrier)
+        for key, value in carrier.items():
+            headers[f"Upstash-Forward-{key}"] = value
+            headers[f"Upstash-Failure-Callback-Forward-{key}"] = value
+
         body = json.dumps({"document_id": document_id}).encode("utf-8")
         resp = _post(publish_url, headers, body)
 
@@ -80,13 +120,16 @@ def _body_hash(body: bytes) -> str:
     return base64.urlsafe_b64encode(hashlib.sha256(body).digest()).rstrip(b"=").decode("ascii")
 
 
-def verify_qstash_signature(body: bytes, signature: str) -> bool:
+def verify_qstash_signature(body: bytes, signature: str, *, url: str | None = None) -> bool:
     """Verify the Upstash-Signature JWT against the current or next signing key."""
     if not signature:
         return False
     keys = [k for k in (settings.QSTASH_CURRENT_SIGNING_KEY, settings.QSTASH_NEXT_SIGNING_KEY) if k]
     if not keys:
         return False
+    required = ["iss", "exp", "body"]
+    if url is not None:
+        required.append("sub")
     expected = _body_hash(body)
     for key in keys:
         try:
@@ -95,9 +138,11 @@ def verify_qstash_signature(body: bytes, signature: str) -> bool:
                 key,
                 algorithms=["HS256"],
                 issuer="Upstash",
-                options={"require": ["iss", "exp", "body"]},
+                options={"require": required},
             )
         except jwt.PyJWTError:
+            continue
+        if url is not None and claims.get("sub") != url:
             continue
         claim_body = str(claims.get("body", "")).rstrip("=").replace("+", "-").replace("/", "_")
         if hmac.compare_digest(claim_body, expected):

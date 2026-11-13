@@ -47,7 +47,7 @@ flowchart LR
 | Web UI (session auth, same services as the API) | `apps/web/` |
 | Guests, the Demo budget and Allowances | `apps/accounts/services.py`, `apps/core/budget.py` |
 | Business logic (ingest, retrieve, answer) | `apps/documents/services.py`, `apps/qa/services.py` |
-| Push-queue task backend & QStash signature checks | `apps/documents/tasks.py` |
+| Push-queue task backend & QStash signature checks | `apps/documents/qstash.py` |
 | Provider interface + OpenAI and Fake implementations | `rag/providers.py` |
 | Chunking, extraction, pricing, pipeline spans | `rag/` |
 | Tracing setup (off unless an OTLP endpoint is set) | `apps/core/tracing.py` |
@@ -160,7 +160,7 @@ The free Render instance sleeps after 15 idle minutes, so the first request afte
 
 ## Design decisions and trade-offs
 
-- **pgvector instead of a separate vector database.** One datastore, transactional ingestion (a document and all of its chunks commit together or not at all), and owner filtering in the same SQL query as the similarity search. For this scale an HNSW index on Postgres is plenty.
+- **pgvector instead of a separate vector database.** One datastore, transactional ingestion (a Document's Chunks and its `ready` status commit together or not at all), and owner filtering in the same SQL query as the similarity search. For this scale an HNSW index on Postgres is plenty.
 - **Hybrid search with two gates, not one fused cut-off.** Each gate has its own relevance floor (vector distance, share of the question's terms) and fusion only orders what passed, so the model is still never called for an off-topic question. The full-text floor is a share of terms rather than `ts_rank_cd` because Postgres ranks have no IDF. See [ADR 0004](docs/adr/0004-hybrid-search-two-gates-and-a-coverage-floor.md).
 - **`owner` denormalised onto `Chunk`.** Retrieval filters by owner without a join, and tenant isolation is enforced in the one query that matters. A composite foreign key to `Document(id, owner)` stops the copy from drifting from its document's owner.
 - **Async ingestion through a push queue (QStash) with a 2 MB size cap.** Uploads validate and extract text inside the request, store the Document as `pending`, and enqueue chunking and embedding via Django's tasks framework. Production uses Upstash QStash so callbacks run over signed HTTP on the existing free web service with retries and no worker or broker; tests, CI, the eval and local dev use `ImmediateBackend` offline. Each callback is still one HTTP request, so the 2 MB upload cap stays. See [ADR 0006](docs/adr/0006-async-ingestion-through-a-push-queue.md).

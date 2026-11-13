@@ -13,10 +13,10 @@ from django.tasks.exceptions import InvalidTask
 from django.utils import timezone
 
 from apps.core.models import DailySpend, OwnerDailySpend
-from apps.documents import tasks as doc_tasks
+from apps.documents import qstash
 from apps.documents.models import Chunk, Document
-from apps.documents.services import Upload, ingest
-from apps.documents.tasks import QStashBackend, verify_qstash_signature
+from apps.documents.qstash import QStashBackend, verify_qstash_signature
+from apps.documents.services import Upload, ingest, ingest_document
 from rag import providers
 from rag.providers import ProviderError
 
@@ -24,34 +24,42 @@ pytestmark = pytest.mark.django_db
 
 SIGNING_KEY = "sig_current_secret_key_for_tests_01"
 NEXT_SIGNING_KEY = "sig_next_secret_key_for_tests_0002"
+CALLBACK_URL = "http://localhost:8000/api/v1/tasks/ingest/"
 
 
-def sign_qstash_body(body: bytes, key: str, *, exp_seconds: int = 300) -> str:
+def sign_qstash_body(body: bytes, key: str, *, url: str = CALLBACK_URL, exp_seconds: int = 300) -> str:
     now = int(time.time())
     digest = base64.urlsafe_b64encode(hashlib.sha256(body).digest()).rstrip(b"=").decode("ascii")
-    payload = {"iss": "Upstash", "iat": now, "nbf": now, "exp": now + exp_seconds, "body": digest}
+    payload = {
+        "iss": "Upstash",
+        "sub": url,
+        "iat": now,
+        "nbf": now,
+        "exp": now + exp_seconds,
+        "body": digest,
+    }
     return jwt.encode(payload, key, algorithm="HS256")
 
 
 @task
-def _sample_task(document_id: int) -> None:
+def _unregistered_task(document_id: int) -> None:
     pass
 
 
 def test_qstash_signature_accepts_current_and_next_keys(settings):
-    settings.QSTASH_CURRENT_SIGNING_KEY = "sig_current_secret_key_for_tests_01"
-    settings.QSTASH_NEXT_SIGNING_KEY = "sig_next_secret_key_for_tests_0002"
+    settings.QSTASH_CURRENT_SIGNING_KEY = SIGNING_KEY
+    settings.QSTASH_NEXT_SIGNING_KEY = NEXT_SIGNING_KEY
     body = b'{"document_id": 42}'
 
     sig_current = sign_qstash_body(body, settings.QSTASH_CURRENT_SIGNING_KEY)
     sig_next = sign_qstash_body(body, settings.QSTASH_NEXT_SIGNING_KEY)
 
-    assert verify_qstash_signature(body, sig_current) is True
-    assert verify_qstash_signature(body, sig_next) is True
+    assert verify_qstash_signature(body, sig_current, url=CALLBACK_URL) is True
+    assert verify_qstash_signature(body, sig_next, url=CALLBACK_URL) is True
 
 
-def test_qstash_signature_rejects_invalid_expired_or_tampered(settings):
-    settings.QSTASH_CURRENT_SIGNING_KEY = "sig_current_secret_key_for_tests_01"
+def test_qstash_signature_rejects_invalid_expired_tampered_or_wrong_url(settings):
+    settings.QSTASH_CURRENT_SIGNING_KEY = SIGNING_KEY
     settings.QSTASH_NEXT_SIGNING_KEY = ""
     body = b'{"document_id": 42}'
 
@@ -59,11 +67,14 @@ def test_qstash_signature_rejects_invalid_expired_or_tampered(settings):
     expired = sign_qstash_body(body, settings.QSTASH_CURRENT_SIGNING_KEY, exp_seconds=-10)
     wrong_key = sign_qstash_body(body, "wrong_secret_key_for_tests_0000000")
 
-    assert verify_qstash_signature(body, "") is False
-    assert verify_qstash_signature(body, "not-a-jwt") is False
-    assert verify_qstash_signature(body, expired) is False
-    assert verify_qstash_signature(body, wrong_key) is False
-    assert verify_qstash_signature(b'{"document_id": 99}', valid) is False
+    assert verify_qstash_signature(body, "", url=CALLBACK_URL) is False
+    assert verify_qstash_signature(body, "not-a-jwt", url=CALLBACK_URL) is False
+    assert verify_qstash_signature(body, expired, url=CALLBACK_URL) is False
+    assert verify_qstash_signature(body, wrong_key, url=CALLBACK_URL) is False
+    assert verify_qstash_signature(b'{"document_id": 99}', valid, url=CALLBACK_URL) is False
+    assert (
+        verify_qstash_signature(body, valid, url="http://localhost:8000/api/v1/tasks/ingest/failed/") is False
+    )
 
 
 def test_qstash_signature_rejects_when_no_signing_keys_configured(settings):
@@ -84,10 +95,10 @@ def test_qstash_backend_enqueue_publishes_with_failure_callback(settings, monkey
         calls.append(SimpleNamespace(url=url, headers=headers, body=body))
         return {"messageId": "msg_123"}
 
-    monkeypatch.setattr(doc_tasks, "_post", fake_post)
+    monkeypatch.setattr(qstash, "_post", fake_post)
 
     backend = QStashBackend("default", {})
-    result = backend.enqueue(_sample_task, (42,), {})
+    result = backend.enqueue(ingest_document, (42,), {})
 
     assert result.id == "msg_123"
     assert result.status == TaskResultStatus.READY
@@ -100,26 +111,28 @@ def test_qstash_backend_enqueue_publishes_with_failure_callback(settings, monkey
     assert json.loads(call.body) == {"document_id": 42}
 
 
-def test_qstash_backend_enqueue_requires_int_document_id(settings):
+def test_qstash_backend_enqueue_requires_known_task_and_int_document_id(settings):
     settings.QSTASH_TOKEN = "tok-test"
     backend = QStashBackend("default", {})
     with pytest.raises(InvalidTask):
-        backend.enqueue(_sample_task, (), {})
+        backend.enqueue(_unregistered_task, (42,), {})
     with pytest.raises(InvalidTask):
-        backend.enqueue(_sample_task, ("not-an-int",), {})
+        backend.enqueue(ingest_document, (), {})
     with pytest.raises(InvalidTask):
-        backend.enqueue(_sample_task, (True,), {})
+        backend.enqueue(ingest_document, ("not-an-int",), {})
+    with pytest.raises(InvalidTask):
+        backend.enqueue(ingest_document, (True,), {})
 
 
 def _signed_post(client, path: str, payload: dict, key: str = SIGNING_KEY):
     body = json.dumps(payload).encode("utf-8")
-    sig = sign_qstash_body(body, key)
+    url = f"http://localhost:8000{path}"
+    sig = sign_qstash_body(body, key, url=url)
     return client.post(path, data=body, content_type="application/json", HTTP_UPSTASH_SIGNATURE=sig)
 
 
 @pytest.fixture
-def pending_doc(user, settings):
-    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
+def pending_doc(user, settings, dummy_tasks):
     settings.QSTASH_CURRENT_SIGNING_KEY = SIGNING_KEY
     settings.QSTASH_NEXT_SIGNING_KEY = NEXT_SIGNING_KEY
     return ingest(user, Upload("coffee.md", "text/markdown", b"French press needs a coarse grind."))
