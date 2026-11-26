@@ -1,8 +1,8 @@
 {{- define "rag.fullname" -}}
 {{- if contains .Chart.Name .Release.Name -}}
-{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- .Release.Name | trunc 51 | trimSuffix "-" -}}
 {{- else -}}
-{{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-%s" .Release.Name .Chart.Name | trunc 51 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 

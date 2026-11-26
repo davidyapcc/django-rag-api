@@ -15,7 +15,9 @@ spec:
     - name: curl
       image: curlimages/curl:8.11.1
       args:
-        - -fsS
+        - -fsSL
+        - --max-redirs
+        - "0"
         - --fail-early
         - -H
         - "Host: {{ .Values.host }}"
