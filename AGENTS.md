@@ -4,7 +4,7 @@ Django + DRF document Q&A API: uploads are chunked, embedded into Postgres/pgvec
 
 ## Done means green
 
-A change is done when every gate in `.github/workflows/ci.yml` passes locally: ruff (check + format), mypy, `makemigrations --check`, pytest (coverage floor 90%), and `manage.py run_eval`. Tests and the eval need Postgres with the pgvector extension at `DATABASE_URL` (see `.env.example`); run them with `LLM_PROVIDER=fake`.
+A change is done when every gate in `.github/workflows/ci.yml` passes locally: ruff (check + format), mypy, `makemigrations --check`, pytest (coverage floor 90%), `manage.py run_eval`, and the `helm` job (lint, kubeconform, kind install, `helm test`; needs Docker, kind, helm and kubeconform, so run it when you touch `deploy/helm/`, the Dockerfile, settings or the health views). Tests and the eval need Postgres with the pgvector extension at `DATABASE_URL` (see `.env.example`); run them with `LLM_PROVIDER=fake`.
 
 ## Invariants
 
@@ -24,6 +24,7 @@ A change is done when every gate in `.github/workflows/ci.yml` passes locally: r
 
 ## Gotchas
 
+- Liveness (`/api/v1/health/live/`) must never touch the database or another dependency; only readiness (`/api/v1/health/`) does. Otherwise a database outage restarts every pod. The Helm Deployment overrides the image `CMD` (which migrates, for Render) to start gunicorn only; keep migrations in the hook Job.
 - `EMBEDDING_DIM` is baked into the `Chunk.embedding` column. Changing it needs a migration and re-embedding every document.
 - Chunk size, `max_distance`, `RAG_MIN_TEXT_COVERAGE` (the full-text gate, ADR 0004) and the eval thresholds in `apps/qa/management/commands/run_eval.py` move together: tune retrieval against the eval, and raise a threshold only when the eval clears it with margin.
 - Ingestion runs through Django's tasks framework: Upstash QStash delivers signed HTTP callbacks in production, and `ImmediateBackend` runs tasks in-process offline (ADR 0006, superseding ADR 0002). Each callback is still one request, so the 2 MB upload cap stays.

@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rag.fullname" . }}
+  labels: {{- include "rag.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "rag.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "rag.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext: {{- include "rag.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: web
+          image: {{ include "rag.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The image's CMD also migrates (for Render); here the pre-install Job does that once.
+          command: [gunicorn]
+          args:
+            - config.wsgi:application
+            - --bind=0.0.0.0:8000
+            - --timeout=60
+            - --access-logfile=-
+          {{- include "rag.env" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 8000
+          # Liveness never touches the database, so a DB outage takes pods out of the
+          # Service (readiness) instead of restarting every one of them.
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health/live/
+              port: http
+              httpHeaders: [{name: Host, value: {{ .Values.host | quote }}}]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health/
+              port: http
+              httpHeaders: [{name: Host, value: {{ .Values.host | quote }}}]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /api/v1/health/live/
+              port: http
+              httpHeaders: [{name: Host, value: {{ .Values.host | quote }}}]
+            periodSeconds: 2
+            failureThreshold: 30
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext: {{- include "rag.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp} # gunicorn worker heartbeat files
+      volumes:
+        - {name: tmp, emptyDir: {}}

@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rag.fullname" . }}-migrate
+  labels: {{- include "rag.labels" . | nindent 4 }}
+  annotations:
+    # Runs once per install/upgrade, before new pods start, so replicas never race on migrate.
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels: # not the selector labels, so the Service and PDB never count this pod
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      securityContext: {{- include "rag.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "rag.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [python, manage.py, migrate, --noinput]
+          {{- include "rag.env" . | nindent 10 }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext: {{- include "rag.containerSecurityContext" . | nindent 12 }}

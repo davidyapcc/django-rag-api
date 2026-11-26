@@ -43,3 +43,19 @@ def test_openapi_schema_renders(api):
     resp = api.get("/api/schema/")
     assert resp.status_code == 200
     assert b"/api/v1/ask/" in resp.content
+
+
+def test_liveness_ignores_the_database(api, monkeypatch):
+    def broken_cursor():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("apps.core.views.connection.cursor", broken_cursor)
+    assert api.get("/api/v1/health/").status_code == 503
+    assert api.get("/api/v1/health/live/").json() == {"status": "ok"}
+
+
+def test_health_endpoints_skip_https_redirect(api, settings):
+    settings.SECURE_SSL_REDIRECT = True
+    assert api.get("/api/v1/health/").status_code == 200
+    assert api.get("/api/v1/health/live/").status_code == 200
+    assert api.get("/api/schema/").status_code == 301

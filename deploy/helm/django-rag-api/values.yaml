@@ -1,0 +1,37 @@
+image:
+  repository: ghcr.io/davidyapcc/django-rag-api
+  tag: "" # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+# Required. A Secret you create before installing (it must exist before the pre-install
+# migration Job runs). Keys become env vars: SECRET_KEY and DATABASE_URL (Postgres with
+# pgvector) at minimum; add OPENAI_API_KEY and QSTASH_* when you enable those.
+existingSecret: ""
+
+# The public hostname. Becomes ALLOWED_HOSTS and the Host header the probes send:
+# kubelet probes otherwise send the pod IP, which Django rejects with 400.
+host: localhost
+
+# Non-secret settings, passed as env vars. Any variable in .env.example works here.
+# For QStash ingestion set TASK_BACKEND: qstash and QSTASH_CALLBACK_BASE_URL: https://<host>.
+env:
+  LLM_PROVIDER: fake
+  TASK_BACKEND: immediate
+  WEB_CONCURRENCY: "2"
+
+# No CPU limit on purpose: CFS throttling adds latency to a request-bound API, and the
+# request already guarantees scheduling. Memory is limited because it is not compressible.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+service:
+  port: 80
+
+podDisruptionBudget:
+  minAvailable: 1

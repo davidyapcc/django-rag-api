@@ -55,9 +55,37 @@ jobs:
       - name: Retrieval and answer eval (fails the build on regression)
         run: uv run python manage.py migrate --noinput && uv run python manage.py run_eval --verbose-cases
 
-  docker:
+  helm:
+    # Builds the image and proves the chart deploys it: migrate Job, probes, helm test.
     runs-on: ubuntu-latest
     needs: [lint, test]
+    env:
+      CHART: deploy/helm/django-rag-api
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t django-rag-api .
+      - run: docker build -t django-rag-api:ci .
+      - uses: azure/setup-helm@v4
+      - run: helm lint $CHART --set existingSecret=ci
+      - name: Validate rendered manifests against the Kubernetes schemas
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          helm template rag $CHART --set existingSecret=ci | ./kubeconform -strict -summary
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: kind
+      - run: kind load docker-image django-rag-api:ci
+      - name: Postgres with pgvector, test-only
+        run: |
+          kubectl apply -f .github/kind/postgres.yaml
+          kubectl rollout status deployment/postgres --timeout=180s
+          kubectl create secret generic rag \
+            --from-literal=SECRET_KEY=ci-only-not-a-secret-0123456789-0123456789-0123456789 \
+            --from-literal=DATABASE_URL=postgres://app:app@postgres:5432/ragapi
+      - run: helm install rag $CHART --set image.repository=django-rag-api --set image.tag=ci --set existingSecret=rag --wait --timeout 5m
+      - run: helm test rag --logs
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl get pods,jobs,events
+          kubectl describe pods
+          kubectl logs -l app.kubernetes.io/instance=rag --all-containers --tail=100
