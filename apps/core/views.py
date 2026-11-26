@@ -17,3 +17,12 @@ def health(request: Request) -> Response:
     except Exception:
         return Response({"status": "error", "database": "unreachable"}, status=503)
     return Response({"status": "ok"})
+
+
+@extend_schema(responses={200: dict})
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([permissions.AllowAny])
+def live(request: Request) -> Response:
+    """Liveness: the process answers. No database check, so a DB outage never restarts pods."""
+    return Response({"status": "ok"})

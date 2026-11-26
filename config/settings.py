@@ -192,7 +192,7 @@ if not DEBUG:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=True)
-    SECURE_REDIRECT_EXEMPT = [r"^api/v1/health/$"]  # platform health checks use plain HTTP
+    SECURE_REDIRECT_EXEMPT = [r"^api/v1/health/"]  # platform health checks use plain HTTP
     SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=3600)
 
 LOGGING = {

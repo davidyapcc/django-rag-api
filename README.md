@@ -131,7 +131,7 @@ uv run pytest --cov                                   # tests, fails under 90% c
 uv run python manage.py run_eval --verbose-cases      # golden-question eval
 ```
 
-CI (GitHub Actions) runs all of these against a real pgvector Postgres service, checks for missing migrations, and builds the Docker image.
+CI (GitHub Actions) runs all of these against a real pgvector Postgres service, checks for missing migrations, builds the Docker image and deploys it with the Helm chart on a throwaway [kind](https://kind.sigs.k8s.io) cluster (see below).
 
 ### The eval
 
@@ -152,11 +152,36 @@ CI runs it with the offline provider, so a change to chunking, retrieval or the 
 2. In OpenAI, create an API key and set a monthly usage limit.
 3. On [Render](https://render.com): **New > Blueprint**, select this repo. `render.yaml` defines a free Docker web service. Fill in `DATABASE_URL` and `OPENAI_API_KEY` when prompted. The Demo budget defaults to USD 0.50 a day and each Owner's Allowance to USD 0.10 (USD 0.05 for Guests); change `DEMO_DAILY_BUDGET_USD`, `ALLOWANCE_DAILY_USD` and `GUEST_ALLOWANCE_DAILY_USD` to adjust them.
 4. Create a free [Upstash QStash](https://upstash.com) project and set `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY` and `QSTASH_NEXT_SIGNING_KEY` in Render (`render.yaml` sets `TASK_BACKEND=qstash`).
-5. Migrations run on container start. Health check: `/api/v1/health/`.
+5. Migrations run on container start. Health check: `/api/v1/health/` (readiness, checks the database); `/api/v1/health/live/` is liveness only.
 6. Optional tracing: set `OTEL_EXPORTER_OTLP_ENDPOINT` (and `OTEL_EXPORTER_OTLP_HEADERS` for the backend's API key) to any OTLP/HTTP backend, such as Grafana Cloud or Honeycomb. `OTEL_SERVICE_NAME` defaults to `django-rag-api`. With no endpoint, tracing does nothing.
 7. Optional error tracking: create a free [Sentry](https://sentry.io) project (platform Django) and set its DSN as `SENTRY_DSN`. Each deploy is tagged as a release from `RENDER_GIT_COMMIT`; `SENTRY_ENVIRONMENT` defaults to `production`. With no DSN, Sentry does nothing.
 
 The free Render instance sleeps after 15 idle minutes, so the first request after a pause takes about a minute.
+
+## Deploy: Kubernetes (Helm)
+
+`deploy/helm/django-rag-api/` deploys the same image to any cluster. The database stays external (Neon, RDS, or your own pgvector Postgres), so the chart holds no state.
+
+- **Migrations** run once per install or upgrade in a `pre-install,pre-upgrade` hook Job; the pods only start gunicorn, so replicas never race on `migrate`.
+- **Probes:** liveness hits `/api/v1/health/live/`, which never touches the database, so a database outage takes pods out of the Service (readiness on `/api/v1/health/`) instead of restarting all of them. Probes send `Host: <host>` because Django rejects the pod IP the kubelet would send.
+- **Resources:** 2 replicas, requests 100m CPU / 256Mi, a 512Mi memory limit and no CPU limit (throttling only adds latency to a request-bound API), and a PodDisruptionBudget of `minAvailable: 1`.
+- **Hardening:** non-root, read-only root filesystem, all capabilities dropped, `RuntimeDefault` seccomp. `values.schema.json` rejects a missing Secret or host at install time.
+- **Ingestion** runs in-process by default; set `env.TASK_BACKEND=qstash` plus `QSTASH_*` for the push queue.
+
+Try it locally on [kind](https://kind.sigs.k8s.io) (free, offline, fake provider):
+
+```bash
+kind create cluster
+docker build -t django-rag-api:dev . && kind load docker-image django-rag-api:dev
+kubectl apply -f .github/kind/postgres.yaml && kubectl rollout status deployment/postgres
+kubectl create secret generic rag --from-literal=SECRET_KEY=$(openssl rand -hex 32) --from-literal=DATABASE_URL=postgres://app:app@postgres:5432/ragapi
+helm install rag deploy/helm/django-rag-api --set image.repository=django-rag-api --set image.tag=dev --set existingSecret=rag --wait
+helm test rag --logs
+```
+
+For a real cluster, put `SECRET_KEY`, `DATABASE_URL` and `OPENAI_API_KEY` in a Secret, then set `existingSecret`, `host` (your public hostname) and `env.LLM_PROVIDER=openai`. Terminate TLS at your ingress: the app redirects plain HTTP to HTTPS except on the health paths. A `v*` git tag publishes the image and the chart to GHCR, after which the chart installs with `helm install rag oci://ghcr.io/davidyapcc/charts/django-rag-api`.
+
+CI runs this on every PR: `helm lint`, kubeconform against the Kubernetes schemas, then the kind install above and `helm test`.
 
 ## Design decisions and trade-offs
 

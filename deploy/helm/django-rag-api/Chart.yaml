@@ -1,0 +1,8 @@
+apiVersion: v2
+name: django-rag-api
+description: Django + DRF document Q&A API on Postgres/pgvector, answering with verified citations.
+type: application
+version: 0.1.0 # the release workflow sets both versions from the v* tag
+appVersion: "0.1.0"
+home: https://github.com/davidyapcc/django-rag-api
+sources: [https://github.com/davidyapcc/django-rag-api]
